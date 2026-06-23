@@ -1,0 +1,213 @@
+{% extends 'layout.html' %}
+{% block content %}
+<div class="row">
+    <div class="col-12 mb-4">
+        <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
+            <h4 class="mb-0 text-dark">Price List</h4>
+            <button class="btn btn-success btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#addPriceForm">
+                ➕ Add Price
+            </button>
+        </div>
+
+        <!-- Collapsible Add Form -->
+        <div class="collapse mb-4" id="addPriceForm">
+            <div class="card card-body bg-light border position-relative">
+                <button type="button" class="btn-close position-absolute top-0 end-0 m-2" data-bs-toggle="collapse" data-bs-target="#addPriceForm"></button>
+                <h5 class="text-success mb-3">Add New Price Item</h5>
+
+                <form action="/price_list" method="POST" id="priceForm">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Item Type</label>
+                        <select name="item_type" id="itemTypeSelect" class="form-select" required>
+                            <option value="Pharmacy">Pharmacy (Drug)</option>
+                            <option value="Laboratory">Laboratory</option>
+                            <option value="Procedures">Procedures</option>
+                            <option value="Consultation">Consultation</option>
+                            <option value="Other">Other</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3" style="position: relative;">
+                        <label class="form-label fw-bold">Item Name</label>
+                        <input type="text" name="item_name" id="itemNameInput" class="form-control" placeholder="Type to search..." autocomplete="off" required>
+                        <div id="results" class="bg-white border rounded shadow-sm" style="display: none; position: absolute; width: 100%; max-height: 200px; overflow-y: auto; z-index: 1050; top: 100%; left: 0; margin-top: 2px;"></div>
+                        <div id="helperBox" class="mt-1" style="display: none;">
+                            <small class="text-muted">Not in Inventory? <a href="/inventory" class="text-success fw-bold">➕ Add to Inventory first</a></small>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Price per Pack (MK)</label>
+                        <input type="number" step="0.01" name="price" class="form-control" placeholder="e.g. 1500.00" required>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Quantity in Pack</label>
+                        <input type="number" name="quantity" class="form-control" value="1" min="1" required>
+                    </div>
+
+                    <button type="submit" class="btn btn-success w-100">Add to Price List</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Price List Table (With Inline Edit) -->
+        <div class="table-responsive">
+            <table class="table table-striped align-middle">
+                <thead class="table-dark">
+                    <tr>
+                        <th>ID</th>
+                        <th>Type</th>
+                        <th>Item Name</th>
+                        <th class="text-end">Price (MK)</th>
+                        <th class="text-end">Qty</th>
+                        <th class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in price_list %}
+                    {% set is_out_of_stock = (item[7] == 0 and item[5] == 0 and item[6] == 0) %}
+                    <tr class="{{ 'opacity-50' if is_out_of_stock else '' }}">
+                        <td>{{ item[0] }}</td>
+                        <td><span class="badge bg-info text-dark">{{ item[1] }}</span></td>
+                        <td>
+                            <strong>{{ item[2] }}</strong>
+
+                            {% if item[7] == 1 %}
+                                <!-- No stock concept (Procedures, Consultation, etc.) -->
+                            {% elif item[5] > 0 and item[6] == 0 %}
+                                <span class="badge bg-success ms-1">✅ Available</span>
+                            {% elif item[5] > 0 and item[6] > 0 %}
+                                <span class="badge bg-success ms-1">✅ Available</span>
+                                <span class="badge bg-warning text-dark ms-1">⚠️ Some stock expired</span>
+                            {% elif item[5] == 0 and item[6] > 0 %}
+                                <span class="badge" style="background-color: #6f0000; color: #fff;">⛔ Available but expired</span>
+                            {% else %}
+                                <span class="badge bg-secondary ms-1">🚫 Out of stock</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            <input type="number" step="0.01" class="form-control form-control-sm d-inline-block edit-price" 
+                                   style="width: 100px;" value="{{ "%.2f"|format(item[3] / 100) }}" data-id="{{ item[0] }}">
+                        </td>
+                        <td class="text-end">
+                            <input type="number" class="form-control form-control-sm d-inline-block edit-qty" 
+                                   style="width: 60px;" value="{{ item[4] }}" data-id="{{ item[0] }}">
+                        </td>
+                        <td class="text-end">
+                            <button class="btn btn-outline-primary btn-sm py-0 px-2 save-edit-btn me-1" data-id="{{ item[0] }}" style="font-size: 0.75rem;">💾</button>
+                            <a href="/price_list/delete/{{ item[0] }}" class="btn btn-outline-danger btn-sm py-0 px-2" style="font-size: 0.75rem;" onclick="return confirm('Delete this price item?')">🗑️</a>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="text-center text-muted py-4">No prices added yet.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- JavaScript for Autocomplete & Inline Save -->
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // --- Autocomplete Logic ---
+    const inventoryItems = [
+        {% for item in inventory_items %}
+        { name: "{{ item[0] }}", category: "{{ item[1] }}" },
+        {% endfor %}
+    ];
+    const priceListItems = [
+        {% for item in price_list %}
+        { name: "{{ item[2] }}", category: "{{ item[1] }}" },
+        {% endfor %}
+    ];
+    const allItems = [...inventoryItems, ...priceListItems];
+
+    const nameInput = document.getElementById('itemNameInput');
+    const results = document.getElementById('results');
+    const catSelect = document.getElementById('itemTypeSelect');
+    const helperBox = document.getElementById('helperBox');
+
+    function closeResults() {
+        results.style.display = 'none';
+        results.innerHTML = '';
+        helperBox.style.display = 'none';
+    }
+
+    nameInput.addEventListener('input', function () {
+        const query = this.value.trim();
+        const selectedCategory = catSelect.value;
+        if (query.length === 0) { closeResults(); return; }
+
+        let matches = allItems.filter(item => 
+            item.name.toLowerCase().includes(query.toLowerCase()) &&
+            (selectedCategory === '' || item.category === selectedCategory)
+        );
+
+        results.innerHTML = '';
+        helperBox.style.display = 'none';
+
+        if (matches.length === 0) {
+            if (selectedCategory === 'Pharmacy' || selectedCategory === 'Laboratory') {
+                helperBox.style.display = 'block';
+            }
+            results.innerHTML = '<div class="p-3 text-muted small">No matches found.</div>';
+            results.style.display = 'block';
+            return;
+        }
+
+        matches.forEach((item) => {
+            const div = document.createElement('div');
+            div.className = 'p-2 border-bottom bg-white';
+            div.style.cursor = 'pointer';
+            div.innerHTML = `<strong>${item.name}</strong> <small class="text-muted">(${item.category})</small>`;
+            div.addEventListener('click', () => {
+                nameInput.value = item.name;
+                catSelect.value = item.category;
+                closeResults();
+            });
+            results.appendChild(div);
+        });
+
+        results.style.display = 'block';
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!results.contains(e.target) && e.target !== nameInput) {
+            closeResults();
+        }
+    });
+
+    // --- Inline Edit Save Logic ---
+    document.querySelectorAll('.save-edit-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const id = this.getAttribute('data-id');
+            const row = this.closest('tr');
+            const priceInput = row.querySelector('.edit-price');
+            const qtyInput = row.querySelector('.edit-qty');
+
+            const price = parseFloat(priceInput.value) * 100; // Convert to Tambala
+            const qty = parseInt(qtyInput.value);
+
+            fetch('/price_list/update/' + id, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ price: price, quantity: qty })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    this.innerText = '✅';
+                    setTimeout(() => this.innerText = '💾', 2000);
+                } else {
+                    alert('Error saving changes!');
+                }
+            });
+        });
+    });
+});
+</script>
+{% endblock %}

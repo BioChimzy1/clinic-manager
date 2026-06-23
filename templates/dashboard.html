@@ -1,0 +1,122 @@
+{% extends 'layout.html' %}
+{% block content %}
+<div class="row g-4">
+    <!-- Welcome Banner -->
+    <div class="col-12">
+        <div class="alert alert-success d-flex justify-content-between align-items-center">
+            <div>
+                <h4 class="mb-0">Welcome back, {{ role }}!</h4>
+                <small class="text-muted">You are logged in to ClinicManager.</small>
+            </div>
+        </div>
+    </div>
+
+    <!-- 1. ACTIVE QUEUE (✅ Built — live stats) -->
+    <div class="col-md-6 col-lg-4">
+        <a href="/queue" class="card h-100 shadow-sm p-3 border-start border-4 border-primary text-decoration-none text-dark dashboard-stat-card">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+                <div>
+                    <h5 class="mb-0">📋 Active Queue</h5>
+                    <small class="text-muted">{{ total_queue_count }} total</small>
+                </div>
+                <span class="text-primary fw-bold">Go →</span>
+            </div>
+            <div class="row text-center g-2">
+                <div class="col-4">
+                    <div class="fs-4 fw-bold text-warning">{{ waiting_count }}</div>
+                    <div class="small text-muted">Waiting</div>
+                </div>
+                <div class="col-4">
+                    <div class="fs-4 fw-bold text-info">{{ pending_count }}</div>
+                    <div class="small text-muted">Pending</div>
+                </div>
+                <div class="col-4">
+                    <div class="fs-4 fw-bold text-secondary">{{ seen_today_count }}</div>
+                    <div class="small text-muted">Seen Today</div>
+                </div>
+            </div>
+        </a>
+    </div>
+
+    <!-- 2. REGISTER PATIENT (✅ Built) -->
+    <div class="col-md-6 col-lg-4">
+        <div class="card h-100 shadow-sm text-center p-3 border-start border-4 border-success">
+            <h2 class="display-4 text-success">➕</h2>
+            <h5>Register Patient</h5>
+            <p class="text-muted small">Add a new patient to the system.</p>
+            <a href="/register" class="btn btn-success btn-sm stretched-link">Register</a>
+        </div>
+    </div>
+
+    <!-- 3. APPOINTMENTS (🚧 Under Construction) -->
+    <div class="col-md-6 col-lg-4">
+        <div class="card h-100 shadow-sm text-center p-3 border-start border-4 border-secondary opacity-75">
+            <h2 class="display-4 text-secondary">📅</h2>
+            <h5>Appointments</h5>
+            <p class="text-muted small">Upcoming scheduled visits.</p>
+            <button class="btn btn-secondary btn-sm" disabled>Coming Soon</button>
+        </div>
+    </div>
+
+    <!-- 4. INVENTORY (✅ Built — live stats) -->
+    <div class="col-md-6 col-lg-4">
+        <a href="/inventory" class="card h-100 shadow-sm p-3 border-start border-4 border-warning text-decoration-none text-dark dashboard-stat-card">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+                <h5 class="mb-0">📦 Inventory</h5>
+                <span class="text-warning fw-bold">Go →</span>
+            </div>
+            <div class="row text-center g-2">
+                <div class="col-4">
+                    <div class="fs-4 fw-bold text-dark">{{ total_items_count }}</div>
+                    <div class="small text-muted">Items</div>
+                </div>
+                <div class="col-4">
+                    <div class="fs-4 fw-bold text-danger">{{ low_stock_count }}</div>
+                    <div class="small text-muted">Low Stock</div>
+                </div>
+                <div class="col-4">
+                    <div class="fs-4 fw-bold text-danger">{{ expiring_soon_count }}</div>
+                    <div class="small text-muted">Expiring 14d</div>
+                </div>
+            </div>
+        </a>
+    </div>
+
+    <!-- 5. PRICE LIST (✅ Built — live stats) -->
+    <div class="col-md-6 col-lg-4">
+        <a href="/price_list" class="card h-100 shadow-sm p-3 border-start border-4 border-info text-decoration-none text-dark dashboard-stat-card">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+                <h5 class="mb-0">💰 Price List</h5>
+                <span class="text-info fw-bold">Go →</span>
+            </div>
+            <div class="text-center py-2">
+                <div class="fs-3 fw-bold text-info">{{ priced_items_count }}</div>
+                <div class="small text-muted">Priced Items</div>
+            </div>
+        </a>
+    </div>
+
+    <!-- 6. FINANCE (🚧 Under Construction) -->
+    <div class="col-md-6 col-lg-4">
+        <div class="card h-100 shadow-sm text-center p-3 border-start border-4 border-danger opacity-75">
+            <h2 class="display-4 text-danger">📊</h2>
+            <h5>Finance</h5>
+            <p class="text-muted small">Revenue, expenses, and loans.</p>
+            <button class="btn btn-danger btn-sm" disabled>Coming Soon</button>
+        </div>
+    </div>
+</div>
+
+<style>
+    /* Stat cards are full clickable cards (anchor tags), so we restyle the
+       hover state to feel interactive without relying on Bootstrap's
+       stretched-link (which doesn't fit a card with multiple stat columns). */
+    .dashboard-stat-card {
+        transition: transform 0.12s ease, box-shadow 0.12s ease;
+    }
+    .dashboard-stat-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 .5rem 1rem rgba(0,0,0,.1) !important;
+    }
+</style>
+{% endblock %}
