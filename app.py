@@ -108,6 +108,7 @@ def init_db():
             clinic_id INTEGER,
             patient_id INTEGER,
             doctor_id INTEGER,
+            appointment_id INTEGER,
             visit_date TEXT NOT NULL,
             diagnosis TEXT,
             referral TEXT DEFAULT 'None',
@@ -121,11 +122,13 @@ def init_db():
             is_synced INTEGER DEFAULT 0,
             FOREIGN KEY (clinic_id) REFERENCES clinics (id),
             FOREIGN KEY (patient_id) REFERENCES patients (id),
-            FOREIGN KEY (doctor_id) REFERENCES staff (id)
+            FOREIGN KEY (doctor_id) REFERENCES staff (id),
+            FOREIGN KEY (appointment_id) REFERENCES appointments (id)
         )
     ''')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_visits_uuid ON visits(uuid);')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_visits_clinic ON visits(clinic_id);')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_visits_appointment ON visits(appointment_id);')
     
     # 6. visit_items
     cursor.execute('''
