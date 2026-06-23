@@ -375,6 +375,16 @@ def inventory():
         quantity = int(request.form['quantity'])
         min_alert = int(request.form['min_alert_level'])
         expiry = request.form['expiry_date']
+
+        # Guardrail: quantity here always means "amount to ADD" (Add mode)
+        # or "amount to ADD to existing stock" (Edit mode) -- it should
+        # never be negative. Removing/reducing stock has its own separate
+        # action (Clear/Reduce Stock below), so a negative number here
+        # would silently do the wrong thing rather than what's intended.
+        if quantity < 0:
+            flash('Quantity cannot be negative. Use "Clear/Reduce Stock" to remove units instead.', 'warning')
+            conn.close()
+            return redirect(url_for('inventory'))
         
         # SCENARIO A: EDIT — updates the picked row, and propagates the
         # rename/recategorize/alert-level change to every OTHER batch of
@@ -515,6 +525,60 @@ def inventory():
     )
 
 
+@app.route('/inventory/reduce/<int:item_id>', methods=['POST'])
+def reduce_inventory(item_id):
+    """
+    Explicit, separate action for removing units from a specific batch --
+    covers both clearing out expired stock entirely and smaller partial
+    write-offs (damaged units, recount corrections, etc). This is
+    deliberately NOT part of the Add/Edit form: that form's quantity
+    field always means "add to stock", and overloading it to also mean
+    "subtract" would be confusing and error-prone. This route only ever
+    subtracts, and never lets the result go below 0 or remove more than
+    what's actually there.
+    """
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+
+    data = request.get_json()
+    amount_to_remove = data.get('amount')
+
+    try:
+        amount_to_remove = int(amount_to_remove)
+    except (TypeError, ValueError):
+        conn.close()
+        return {'success': False, 'error': 'Invalid amount.'}
+
+    if amount_to_remove <= 0:
+        conn.close()
+        return {'success': False, 'error': 'Amount must be greater than 0.'}
+
+    cursor.execute("SELECT quantity FROM inventory WHERE id = ? AND is_active = 1", (item_id,))
+    row = cursor.fetchone()
+
+    if row is None:
+        conn.close()
+        return {'success': False, 'error': 'Item not found.'}
+
+    current_qty = row[0]
+
+    if amount_to_remove > current_qty:
+        conn.close()
+        return {'success': False, 'error': f'Cannot remove {amount_to_remove} -- only {current_qty} in stock.'}
+
+    new_qty = current_qty - amount_to_remove
+
+    cursor.execute(
+        "UPDATE inventory SET quantity = ?, updated_at = ? WHERE id = ?",
+        (new_qty, datetime.datetime.now().isoformat(), item_id)
+    )
+    conn.commit()
+    conn.close()
+
+    return {'success': True, 'new_quantity': new_qty}
+
+
+
 
 # ------------------------------------------------------------------
 # PRICE LIST MANAGEMENT
@@ -529,6 +593,11 @@ def price_list():
         item_name = request.form['item_name']
         price = int(float(request.form['price']) * 100)  # Convert to Tambala
         quantity = int(request.form['quantity'])
+
+        if price < 0 or quantity < 0:
+            flash('Price and quantity cannot be negative.', 'warning')
+            conn.close()
+            return redirect(url_for('price_list'))
         
         # Check if this item already exists in Inventory (to link it)
         cursor.execute("SELECT id FROM inventory WHERE item_name = ? AND category = ? AND is_active = 1", (item_name, item_type))
@@ -607,6 +676,19 @@ def update_price_item(item_id):
     data = request.get_json()
     new_price = data.get('price')
     new_qty = data.get('quantity')
+
+    # Guardrail: neither price nor quantity should ever go negative here.
+    try:
+        if new_price is None or float(new_price) < 0:
+            conn.close()
+            return {'success': False, 'error': 'Price cannot be negative.'}
+        if new_qty is None or int(new_qty) < 0:
+            conn.close()
+            return {'success': False, 'error': 'Quantity cannot be negative.'}
+    except (TypeError, ValueError):
+        conn.close()
+        return {'success': False, 'error': 'Invalid price or quantity.'}
+
     try:
         cursor.execute('''
             UPDATE price_list 

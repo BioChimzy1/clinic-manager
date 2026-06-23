@@ -38,7 +38,7 @@
 
                     <div class="mb-3">
                         <label class="form-label fw-bold">Price per Pack (MK)</label>
-                        <input type="number" step="0.01" name="price" class="form-control" placeholder="e.g. 1500.00" required>
+                        <input type="number" step="0.01" name="price" class="form-control" placeholder="e.g. 1500.00" min="0" required>
                     </div>
 
                     <div class="mb-3">
@@ -88,11 +88,11 @@
                         </td>
                         <td class="text-end">
                             <input type="number" step="0.01" class="form-control form-control-sm d-inline-block edit-price" 
-                                   style="width: 100px;" value="{{ "%.2f"|format(item[3] / 100) }}" data-id="{{ item[0] }}">
+                                   style="width: 100px;" value="{{ "%.2f"|format(item[3] / 100) }}" data-id="{{ item[0] }}" min="0">
                         </td>
                         <td class="text-end">
                             <input type="number" class="form-control form-control-sm d-inline-block edit-qty" 
-                                   style="width: 60px;" value="{{ item[4] }}" data-id="{{ item[0] }}">
+                                   style="width: 60px;" value="{{ item[4] }}" data-id="{{ item[0] }}" min="0">
                         </td>
                         <td class="text-end">
                             <button class="btn btn-outline-primary btn-sm py-0 px-2 save-edit-btn me-1" data-id="{{ item[0] }}" style="font-size: 0.75rem;">💾</button>

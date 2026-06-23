@@ -55,7 +55,7 @@
                     
                     <div class="mb-3">
                         <label class="form-label fw-bold" id="qtyLabel">Quantity</label>
-                        <input type="number" name="quantity" id="quantityInput" class="form-control" placeholder="Enter quantity" required>
+                        <input type="number" name="quantity" id="quantityInput" class="form-control" placeholder="Enter quantity" min="0" required>
                         <small class="text-muted" id="qtyHint" style="display: none;"></small>
                     </div>
                     
@@ -132,7 +132,7 @@
 
                         <td class="text-end">
                             <!-- Inline Edit Button: Triggers the top form -->
-                            <button class="btn btn-outline-primary btn-sm py-0 px-2 inline-edit-btn" 
+                            <button class="btn btn-outline-primary btn-sm py-0 px-2 inline-edit-btn mb-1" 
                                     data-id="{{ item[0] }}" 
                                     data-name="{{ item[2] }}" 
                                     data-category="{{ item[1] }}" 
@@ -140,6 +140,18 @@
                                     data-alert="{{ item[4] }}" 
                                     data-expiry="{{ item[5] }}" 
                                     style="font-size: 0.75rem;">✏️ Edit</button>
+                            <br>
+                            <!-- Clear/Reduce Stock: a separate, explicit subtract-only
+                                 action. Lets you remove some or all of this batch's
+                                 quantity (e.g. clearing out an expired batch, or a
+                                 partial write-off for damaged units) without touching
+                                 the Add/Edit form, which only ever adds. -->
+                            <button class="btn btn-outline-danger btn-sm py-0 px-2 clear-stock-btn"
+                                    data-id="{{ item[0] }}"
+                                    data-name="{{ item[2] }}"
+                                    data-qty="{{ item[3] }}"
+                                    data-expiry="{{ item[5] }}"
+                                    style="font-size: 0.75rem;">🗑️ Clear</button>
                         </td>
                     </tr>
                     {% else %}
@@ -432,6 +444,61 @@ document.addEventListener('DOMContentLoaded', function() {
             const formCollapse = new bootstrap.Collapse(document.getElementById('addInventoryForm'), { toggle: false });
             formCollapse.show();
             document.getElementById('addInventoryForm').scrollIntoView({ behavior: 'smooth' });
+        });
+    });
+
+    // Clear / Reduce Stock Button Logic.
+    // Separate, subtract-only action -- never touches the Add/Edit form.
+    // Defaults the prompt to the full current quantity (so clicking
+    // through with the default does a full "clear to 0"), but you can
+    // type a smaller number for a partial write-off.
+    document.querySelectorAll('.clear-stock-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const id = this.getAttribute('data-id');
+            const name = this.getAttribute('data-name');
+            const currentQty = parseInt(this.getAttribute('data-qty'), 10);
+            const expiry = this.getAttribute('data-expiry');
+
+            const input = prompt(
+                `Remove how many units of "${name}" (exp ${expiry})?\n` +
+                `Currently in stock: ${currentQty}.\n` +
+                `Leave as-is to clear all ${currentQty} units, or type a smaller number for a partial removal.`,
+                currentQty
+            );
+
+            if (input === null) return; // cancelled
+
+            const amount = parseInt(input, 10);
+
+            if (isNaN(amount) || amount <= 0) {
+                alert('Please enter a number greater than 0.');
+                return;
+            }
+            if (amount > currentQty) {
+                alert(`Cannot remove ${amount} -- only ${currentQty} in stock.`);
+                return;
+            }
+
+            if (!confirm(`Remove ${amount} unit(s) of "${name}"? This cannot be undone.`)) {
+                return;
+            }
+
+            fetch('/inventory/reduce/' + id, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ amount: amount })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    location.reload();
+                } else {
+                    alert('Error: ' + (data.error || 'Could not remove stock.'));
+                }
+            })
+            .catch(() => {
+                alert('Network error -- could not remove stock.');
+            });
         });
     });
  
