@@ -713,6 +713,555 @@ def delete_price_item(item_id):
     conn.commit()
     conn.close()
     return redirect(url_for('price_list'))
+    
+@app.route('/visit/<int:patient_id>', methods=['GET', 'POST'])
+def visit(patient_id):
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+
+    # Find the patient and their currently ACTIVE appointment (the one
+    # that's actually sitting in the queue right now as Waiting or
+    # Pending). A patient could in theory have older appointment rows
+    # from past visits, but only the live one matters for opening a
+    # new visit -- this mirrors exactly what the queue page itself
+    # already filters on.
+    cursor.execute('''
+        SELECT patients.id, patients.name, patients.sex, patients.date_of_birth,
+               appointments.id, appointments.appointment_type, appointments.status
+        FROM patients
+        JOIN appointments ON patients.id = appointments.patient_id
+        WHERE patients.id = ? AND appointments.status IN ('Waiting', 'Pending')
+        ORDER BY appointments.created_at DESC
+        LIMIT 1
+    ''', (patient_id,))
+    row = cursor.fetchone()
+
+    if row is None:
+        conn.close()
+        flash('This patient is not currently in the active queue.', 'warning')
+        return redirect(url_for('queue'))
+
+    (p_id, p_name, p_sex, p_dob, appointment_id, appointment_type, appointment_status) = row
+
+    if request.method == 'POST':
+        diagnosis = request.form.get('diagnosis', '').strip()
+
+        if not diagnosis:
+            flash('Diagnosis is required before saving a visit.', 'warning')
+            conn.close()
+            return redirect(url_for('visit', patient_id=patient_id))
+
+        # Selected items arrive as parallel form fields:
+        #   selected_items = list of price_list IDs that were checked
+        #   qty_<id> = quantity for that specific item
+        selected_ids = request.form.getlist('selected_items')
+
+        if not selected_ids:
+            flash('Select at least one item (consultation, drug, test, or procedure) before saving.', 'warning')
+            conn.close()
+            return redirect(url_for('visit', patient_id=patient_id))
+
+        # Re-check stock status server-side for every selected item --
+        # never trust what the client sent, since the page could be
+        # stale (someone else cleared stock in the meantime) or the
+        # request could be tampered with. Same logic as the price list
+        # page: fully-expired-with-nothing-usable items are blocked
+        # outright; partially-expired-but-still-stocked items are fine.
+        today_str = datetime.date.today().isoformat()
+        line_items = []
+        total_fee = 0
+
+        for price_list_id in selected_ids:
+            qty_raw = request.form.get(f'qty_{price_list_id}', '1')
+            try:
+                qty = int(qty_raw)
+            except ValueError:
+                qty = 0
+
+            if qty <= 0:
+                flash('Quantity must be at least 1 for every selected item.', 'warning')
+                conn.close()
+                return redirect(url_for('visit', patient_id=patient_id))
+
+            cursor.execute('''
+                SELECT price_list.id, price_list.item_name, price_list.item_type, price_list.price,
+                       price_list.quantity AS pack_quantity, price_list.inventory_id,
+                       COALESCE(stock.usable_qty, 0) AS usable_qty,
+                       COALESCE(stock.expired_qty, 0) AS expired_qty
+                FROM price_list
+                LEFT JOIN inventory AS linked_item
+                    ON price_list.inventory_id = linked_item.id
+                LEFT JOIN (
+                    SELECT LOWER(TRIM(item_name)) AS name_key, category,
+                           SUM(CASE WHEN expiry_date >= ? THEN quantity ELSE 0 END) AS usable_qty,
+                           SUM(CASE WHEN expiry_date <  ? THEN quantity ELSE 0 END) AS expired_qty
+                    FROM inventory
+                    WHERE is_active = 1
+                    GROUP BY name_key, category
+                ) AS stock
+                    ON stock.name_key = LOWER(TRIM(linked_item.item_name))
+                    AND stock.category = linked_item.category
+                WHERE price_list.id = ? AND price_list.is_active = 1
+            ''', (today_str, today_str, price_list_id))
+            item_row = cursor.fetchone()
+
+            if item_row is None:
+                flash('One of the selected items no longer exists. Please review your selections.', 'warning')
+                conn.close()
+                return redirect(url_for('visit', patient_id=patient_id))
+
+            (pl_id, pl_name, pl_type, pl_price, pl_pack_quantity, pl_inventory_id, usable_qty, expired_qty) = item_row
+
+            # Block selection only when there's a stock concept AND
+            # nothing usable remains (fully expired or genuinely out of
+            # stock). Items with no inventory link at all (Procedures,
+            # Consultation) have no stock concept and are always fine.
+            has_stock_concept = pl_inventory_id is not None
+            if has_stock_concept and usable_qty <= 0:
+                flash(f'"{pl_name}" has no usable stock available (expired or out of stock) and cannot be added to this visit.', 'warning')
+                conn.close()
+                return redirect(url_for('visit', patient_id=patient_id))
+
+            # price_list.price is the price for a whole PACK of
+            # price_list.quantity units (e.g. MK 2500 for a pack of 30
+            # capsules) -- it is NOT a per-unit price. If the doctor
+            # prescribes a different quantity than the pack size, the
+            # line total scales proportionally: (price / pack_quantity)
+            # * quantity_prescribed. Guard against a pack_quantity of 0
+            # or missing (shouldn't happen given price_list's own
+            # min=1 constraint, but never trust stored data blindly).
+            # Round to the nearest whole Tambala rather than truncating,
+            # so fractional-cent rounding never silently loses money.
+            pack_quantity = pl_pack_quantity if pl_pack_quantity and pl_pack_quantity > 0 else 1
+            price_per_unit = pl_price / pack_quantity
+            line_total = round(price_per_unit * qty)
+
+            total_fee += line_total
+            line_items.append((pl_id, pl_name, pl_type, price_per_unit, pl_inventory_id, qty, line_total))
+
+        # All validation passed -- create the visit and its line items.
+        visit_uuid = str(uuid.uuid4())
+        now = datetime.datetime.now().isoformat()
+
+        cursor.execute('''
+            INSERT INTO visits (uuid, clinic_id, patient_id, doctor_id, appointment_id,
+                                 visit_date, diagnosis, total_fee, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (visit_uuid, 1, patient_id, 1, appointment_id, now, diagnosis, total_fee, 'Ready for Cashier', now))
+        visit_id = cursor.lastrowid
+
+        for (pl_id, pl_name, pl_type, price_per_unit, pl_inventory_id, qty, line_total) in line_items:
+            cursor.execute('''
+                INSERT INTO visit_items (uuid, visit_id, inventory_id, price_list_id, item_type, item_name,
+                                          quantity, price_per_unit, total_line_price, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (str(uuid.uuid4()), visit_id, pl_inventory_id, pl_id, pl_type, pl_name, qty, round(price_per_unit), line_total, now))
+
+        # Move the patient out of the active queue -- their appointment
+        # is now "In Progress" rather than Waiting/Pending, which is
+        # what the queue page filters on.
+        cursor.execute("UPDATE appointments SET status = 'In Progress', updated_at = ? WHERE id = ?", (now, appointment_id))
+
+        conn.commit()
+        conn.close()
+        flash(f'Visit saved for {p_name}. Sent to cashier.', 'success')
+        return redirect(url_for('queue'))
+
+    # GET: show the form with all available price_list items, each
+    # annotated with live stock status (same logic as the price list
+    # page) so the template can grey out anything with no usable stock.
+    today_str = datetime.date.today().isoformat()
+
+    cursor.execute('''
+        SELECT price_list.id, price_list.item_type, price_list.item_name,
+               price_list.price, price_list.quantity AS default_quantity,
+               COALESCE(stock.usable_qty, 0) AS usable_qty,
+               COALESCE(stock.expired_qty, 0) AS expired_qty,
+               CASE WHEN price_list.inventory_id IS NULL THEN 1 ELSE 0 END AS no_stock_concept
+        FROM price_list
+        LEFT JOIN inventory AS linked_item
+            ON price_list.inventory_id = linked_item.id
+        LEFT JOIN (
+            SELECT LOWER(TRIM(item_name)) AS name_key, category,
+                   SUM(CASE WHEN expiry_date >= ? THEN quantity ELSE 0 END) AS usable_qty,
+                   SUM(CASE WHEN expiry_date <  ? THEN quantity ELSE 0 END) AS expired_qty
+            FROM inventory
+            WHERE is_active = 1
+            GROUP BY name_key, category
+        ) AS stock
+            ON stock.name_key = LOWER(TRIM(linked_item.item_name))
+            AND stock.category = linked_item.category
+        WHERE price_list.is_active = 1
+        ORDER BY price_list.item_type, price_list.item_name
+    ''', (today_str, today_str))
+    all_priced_items = cursor.fetchall()
+
+    conn.close()
+
+    return render_template(
+        'visit.html',
+        patient_id=p_id,
+        patient_name=p_name,
+        patient_sex=p_sex,
+        patient_dob=p_dob,
+        appointment_type=appointment_type,
+        priced_items=all_priced_items
+    )
+
+# ------------------------------------------------------------------
+# CASHIER PAGE
+# ------------------------------------------------------------------
+@app.route('/cashier')
+def cashier():
+    """Show all visits with status 'Ready for Cashier' or 'Loan Active'"""
+    # Role check: Admin, Cashier, or Doctor (case-insensitive)
+    allowed_roles = ['admin', 'cashier', 'doctor']
+    user_role = session.get('role', '').lower()
+    if user_role not in allowed_roles:
+        flash('You do not have permission to access the Cashier page.', 'danger')
+        return redirect(url_for('dashboard'))
+    
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    
+    # Fetch visits ready for cashier or with active loans
+    cursor.execute('''
+        SELECT 
+            visits.id,
+            visits.uuid,
+            visits.visit_date,
+            visits.diagnosis,
+            visits.total_fee,
+            visits.amount_paid,
+            visits.loan_witness,
+            visits.status,
+            visits.discount_amount,
+            visits.discount_reason,
+            visits.loan_due_date,
+            patients.name AS patient_name,
+            patients.id AS patient_id
+        FROM visits
+        JOIN patients ON visits.patient_id = patients.id
+        WHERE visits.status IN ('Ready for Cashier', 'Loan Active')
+        ORDER BY visits.created_at ASC
+    ''')
+    cashier_list = cursor.fetchall()
+    conn.close()
+    
+    return render_template('cashier.html', 
+                          cashier_list=cashier_list,
+                          role=session.get('role'))
+
+@app.route('/cashier/process/<int:visit_id>', methods=['POST'])
+def process_payment(visit_id):
+    """Process payment for a visit (Full Payment, Discount, or Loan)"""
+    # Role check
+    allowed_roles = ['admin', 'cashier', 'doctor']
+    user_role = session.get('role', '').lower()
+    if user_role not in allowed_roles:
+        flash('Permission denied.', 'danger')
+        return redirect(url_for('dashboard'))
+    
+    data = request.get_json()
+    payment_mode = data.get('payment_mode')
+    
+    if payment_mode not in ['full', 'discount', 'loan']:
+        return {'success': False, 'error': 'Invalid payment mode.'}
+    
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    
+    try:
+        # Get the visit details
+        cursor.execute('''
+            SELECT total_fee, amount_paid, status, patient_id, appointment_id
+            FROM visits WHERE id = ?
+        ''', (visit_id,))
+        visit_row = cursor.fetchone()
+        
+        if not visit_row:
+            conn.close()
+            return {'success': False, 'error': 'Visit not found.'}
+        
+        total_fee, current_paid, status, patient_id, appointment_id = visit_row
+        
+        if status not in ['Ready for Cashier', 'Loan Active']:
+            conn.close()
+            return {'success': False, 'error': 'Visit is not in a payable state.'}
+        
+        now = datetime.datetime.now().isoformat()
+        
+        if payment_mode == 'full':
+            # Full Payment: mark as fully paid
+            cursor.execute('''
+                UPDATE visits
+                SET amount_paid = total_fee,
+                    discount_amount = 0,
+                    discount_reason = NULL,
+                    status = 'Paid',
+                    updated_at = ?
+                WHERE id = ?
+            ''', (now, visit_id))
+            
+        elif payment_mode == 'discount':
+            # Discount: total_fee remains as original, discount_amount tracks reduction
+            discount_amount = data.get('discount_amount')
+            discount_reason = data.get('discount_reason', '').strip()
+            
+            if discount_amount is None or discount_amount < 0:
+                conn.close()
+                return {'success': False, 'error': 'Invalid discount amount.'}
+            
+            if discount_amount > total_fee:
+                conn.close()
+                return {'success': False, 'error': 'Discount cannot exceed the total fee.'}
+            
+            if not discount_reason:
+                conn.close()
+                return {'success': False, 'error': 'Discount reason is required.'}
+            
+            discounted_total = total_fee - discount_amount
+            cursor.execute('''
+                UPDATE visits
+                SET amount_paid = ?,
+                    discount_amount = ?,
+                    discount_reason = ?,
+                    status = 'Paid',
+                    updated_at = ?
+                WHERE id = ?
+            ''', (discounted_total, discount_amount, discount_reason, now, visit_id))
+            
+        elif payment_mode == 'loan':
+            # Loan: partial payment, witness required
+            amount_paid = data.get('amount_paid')
+            witness_name = data.get('witness_name', '').strip()
+            loan_due_date = data.get('loan_due_date')
+            
+            if amount_paid is None or amount_paid < 0:
+                conn.close()
+                return {'success': False, 'error': 'Invalid payment amount.'}
+            
+            if amount_paid >= total_fee:
+                conn.close()
+                return {'success': False, 'error': 'Loan only applies to partial payments. Use Full Payment instead.'}
+            
+            if not witness_name:
+                conn.close()
+                return {'success': False, 'error': 'Witness name is required for loans.'}
+            
+            # Validate due date format if provided
+            if loan_due_date and loan_due_date.strip():
+                try:
+                    datetime.datetime.strptime(loan_due_date, '%Y-%m-%d')
+                except ValueError:
+                    conn.close()
+                    return {'success': False, 'error': 'Invalid due date format. Use YYYY-MM-DD.'}
+            else:
+                loan_due_date = None
+            
+            cursor.execute('''
+                UPDATE visits
+                SET amount_paid = ?,
+                    loan_witness = ?,
+                    loan_due_date = ?,
+                    status = 'Loan Active',
+                    updated_at = ?
+                WHERE id = ?
+            ''', (amount_paid, witness_name, loan_due_date, now, visit_id))
+            
+            # Record initial loan payment in loan_payments table
+            loan_balance = total_fee - amount_paid
+            if loan_balance > 0:
+                cursor.execute('''
+                    INSERT INTO loan_payments (uuid, visit_id, payment_date, amount, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (str(uuid.uuid4()), visit_id, now, amount_paid, now))
+        
+        # ------------------------------------------------------------------
+        # INVENTORY DEDUCTION: FEFO (First-Expired, First-Out)
+        # For each visit_item linked to inventory, deduct from the soonest-
+        # expiring batch first, spilling over to the next batch as needed.
+        # ------------------------------------------------------------------
+        cursor.execute('''
+            SELECT visit_items.inventory_id, visit_items.quantity, visit_items.item_name
+            FROM visit_items
+            WHERE visit_items.visit_id = ?
+              AND visit_items.inventory_id IS NOT NULL
+        ''', (visit_id,))
+        items_to_deduct = cursor.fetchall()
+        
+        for inv_id, qty_to_deduct, item_name in items_to_deduct:
+            if inv_id is None:
+                continue
+            
+            # Get all active batches for this inventory item, sorted by expiry
+            cursor.execute('''
+                SELECT id, quantity, expiry_date
+                FROM inventory
+                WHERE id = ? AND is_active = 1
+                ORDER BY expiry_date ASC
+            ''', (inv_id,))
+            batches = cursor.fetchall()
+            
+            remaining = qty_to_deduct
+            
+            for batch_id, batch_qty, expiry in batches:
+                if remaining <= 0:
+                    break
+                
+                if batch_qty > 0:
+                    deduct = min(remaining, batch_qty)
+                    new_qty = batch_qty - deduct
+                    cursor.execute('''
+                        UPDATE inventory
+                        SET quantity = ?, updated_at = ?
+                        WHERE id = ?
+                    ''', (new_qty, now, batch_id))
+                    remaining -= deduct
+            
+            if remaining > 0:
+                # This shouldn't happen if stock check was accurate, but log it
+                print(f"WARNING: Could not fully deduct {item_name}, still {remaining} units short")
+        
+        conn.commit()
+        conn.close()
+        return {'success': True}
+        
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return {'success': False, 'error': str(e)}
+
+@app.route('/cashier/loan/<int:visit_id>', methods=['GET'])
+def loan_details(visit_id):
+    """View loan payment history for a specific visit"""
+    # Role check
+    allowed_roles = ['admin', 'cashier', 'doctor']
+    user_role = session.get('role', '').lower()
+    if user_role not in allowed_roles:
+        flash('Permission denied.', 'danger')
+        return redirect(url_for('dashboard'))
+    
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT 
+            visits.id,
+            visits.total_fee,
+            visits.amount_paid,
+            visits.loan_witness,
+            visits.loan_due_date,
+            visits.status,
+            patients.name AS patient_name,
+            patients.id AS patient_id
+        FROM visits
+        JOIN patients ON visits.patient_id = patients.id
+        WHERE visits.id = ?
+    ''', (visit_id,))
+    visit = cursor.fetchone()
+    
+    if not visit:
+        conn.close()
+        return redirect(url_for('cashier'))
+    
+    cursor.execute('''
+        SELECT payment_date, amount
+        FROM loan_payments
+        WHERE visit_id = ?
+        ORDER BY payment_date ASC
+    ''', (visit_id,))
+    payments = cursor.fetchall()
+    
+    conn.close()
+    
+    return render_template('loan_details.html',
+                          visit=visit,
+                          payments=payments,
+                          role=session.get('role'))
+
+@app.route('/cashier/loan/pay/<int:visit_id>', methods=['POST'])
+def add_loan_payment(visit_id):
+    """Add a new payment toward an outstanding loan"""
+    # Role check
+    allowed_roles = ['admin', 'cashier', 'doctor']
+    user_role = session.get('role', '').lower()
+    if user_role not in allowed_roles:
+        flash('Permission denied.', 'danger')
+        return redirect(url_for('dashboard'))
+    
+    data = request.get_json()
+    amount = data.get('amount')
+    
+    try:
+        amount = int(amount)
+    except (TypeError, ValueError):
+        return {'success': False, 'error': 'Invalid payment amount.'}
+    
+    if amount <= 0:
+        return {'success': False, 'error': 'Amount must be greater than 0.'}
+    
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute('''
+            SELECT total_fee, amount_paid, status
+            FROM visits WHERE id = ?
+        ''', (visit_id,))
+        visit = cursor.fetchone()
+        
+        if not visit:
+            conn.close()
+            return {'success': False, 'error': 'Visit not found.'}
+        
+        total_fee, current_paid, status = visit
+        
+        if status != 'Loan Active':
+            conn.close()
+            return {'success': False, 'error': 'This visit is not an active loan.'}
+        
+        new_total_paid = current_paid + amount
+        
+        if new_total_paid > total_fee:
+            conn.close()
+            return {'success': False, 'error': 'Payment exceeds remaining loan balance.'}
+        
+        now = datetime.datetime.now().isoformat()
+        
+        # Record the payment
+        cursor.execute('''
+            INSERT INTO loan_payments (uuid, visit_id, payment_date, amount, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (str(uuid.uuid4()), visit_id, now, amount, now))
+        
+        # Update the visit's amount_paid
+        cursor.execute('''
+            UPDATE visits
+            SET amount_paid = ?,
+                updated_at = ?
+            WHERE id = ?
+        ''', (new_total_paid, now, visit_id))
+        
+        # If fully paid, mark as Paid
+        if new_total_paid >= total_fee:
+            cursor.execute('''
+                UPDATE visits
+                SET status = 'Paid',
+                    loan_witness = NULL,
+                    loan_due_date = NULL,
+                    updated_at = ?
+                WHERE id = ?
+            ''', (now, visit_id))
+        
+        conn.commit()
+        conn.close()
+        return {'success': True}
+        
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return {'success': False, 'error': str(e)}
 
 # ------------------------------------------------------------------
 # STAFF MANAGEMENT (Coming Soon)
@@ -760,6 +1309,10 @@ def dashboard():
     cursor.execute("SELECT COUNT(*) FROM price_list WHERE is_active = 1")
     priced_items_count = cursor.fetchone()[0]
 
+    # --- Cashier stats ---
+    cursor.execute("SELECT COUNT(*) FROM visits WHERE status IN ('Ready for Cashier', 'Loan Active')")
+    cashier_count = cursor.fetchone()[0]
+
     conn.close()
 
     return render_template(
@@ -772,7 +1325,8 @@ def dashboard():
         total_items_count=total_items_count,
         low_stock_count=low_stock_count,
         expiring_soon_count=expiring_soon_count,
-        priced_items_count=priced_items_count
+        priced_items_count=priced_items_count,
+        cashier_count=cashier_count
     )
 
 # ------------------------------------------------------------------

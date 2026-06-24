@@ -96,14 +96,18 @@
         </a>
     </div>
 
-    <!-- 6. FINANCE (🚧 Under Construction) -->
+    <!-- 6. CASHIER (✅ Built — live stats) -->
     <div class="col-md-6 col-lg-4">
-        <div class="card h-100 shadow-sm text-center p-3 border-start border-4 border-danger opacity-75">
-            <h2 class="display-4 text-danger">📊</h2>
-            <h5>Finance</h5>
-            <p class="text-muted small">Revenue, expenses, and loans.</p>
-            <button class="btn btn-danger btn-sm" disabled>Coming Soon</button>
-        </div>
+        <a href="/cashier" class="card h-100 shadow-sm p-3 border-start border-4 border-danger text-decoration-none text-dark dashboard-stat-card">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+                <h5 class="mb-0">💰 Cashier</h5>
+                <span class="text-danger fw-bold">Go →</span>
+            </div>
+            <div class="text-center py-2">
+                <div class="fs-3 fw-bold text-danger">{{ cashier_count }}</div>
+                <div class="small text-muted">Awaiting Payment</div>
+            </div>
+        </a>
     </div>
 </div>
 

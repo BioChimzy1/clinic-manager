@@ -1,0 +1,343 @@
+{% extends 'layout.html' %}
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
+            <div>
+                <h3 class="mb-0">📋 Open Visit</h3>
+                <small class="text-muted">
+                    {{ patient_name }} &middot; {{ patient_sex }} &middot; DOB {{ patient_dob }}
+                    &middot;
+                    {% if appointment_type == 'Appointment' %}
+                        <span class="badge bg-primary">Appointment</span>
+                    {% else %}
+                        <span class="badge bg-success">Walk-In</span>
+                    {% endif %}
+                </small>
+            </div>
+            <a href="/queue" class="btn btn-secondary btn-sm">← Back to Queue</a>
+        </div>
+
+        <form action="/visit/{{ patient_id }}" method="POST" id="visitForm">
+
+            <!-- Diagnosis -->
+            <div class="mb-4">
+                <label class="form-label fw-bold">Diagnosis <span class="text-danger">*</span></label>
+                <textarea name="diagnosis" class="form-control" rows="3" placeholder="e.g. Malaria, uncomplicated" required></textarea>
+            </div>
+
+            <!-- Item search + add -->
+            <div class="mb-3" style="position: relative;">
+                <label class="form-label fw-bold">Add Item (Consultation, Drug, Test, or Procedure)</label>
+                <input type="text" id="itemSearchInput" class="form-control" placeholder="Type to search price list..." autocomplete="off">
+                <div id="searchResults" class="bg-white border rounded shadow-sm" style="display: none; position: absolute; width: 100%; max-height: 260px; overflow-y: auto; z-index: 1050; top: 100%; left: 0; margin-top: 2px;"></div>
+            </div>
+
+            <!-- Selected items table -->
+            <div class="table-responsive mb-3">
+                <table class="table table-striped align-middle" id="selectedItemsTable">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Type</th>
+                            <th>Item</th>
+                            <th class="text-end">Pack Price (MK)</th>
+                            <th style="width: 130px;">Qty</th>
+                            <th class="text-end">Line Total</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="selectedItemsBody">
+                        <tr id="emptyRow">
+                            <td colspan="6" class="text-center text-muted py-4">No items added yet. Search above to add a consultation, drug, test, or procedure.</td>
+                        </tr>
+                    </tbody>
+                    <tfoot>
+                        <tr>
+                            <th colspan="4" class="text-end">Total</th>
+                            <th class="text-end" id="grandTotal">MK 0.00</th>
+                            <th></th>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+
+            <div class="d-flex justify-content-end gap-2">
+                <a href="/queue" class="btn btn-secondary">Cancel</a>
+                <button type="submit" class="btn btn-success px-4" id="saveVisitBtn">💾 Save Visit &amp; Send to Cashier</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    // Full price list, annotated with live stock status from the server.
+    // usable/expired are summed quantities across all batches of that
+    // drug; noStockConcept means this item has no inventory link at all
+    // (Procedures, Consultation) and is therefore always selectable.
+    const allItems = [
+        {% for item in priced_items %}
+        {
+            id: "{{ item[0] }}",
+            type: "{{ item[1] }}",
+            name: "{{ item[2]|e }}",
+            price: {{ item[3] }},
+            defaultQuantity: {{ item[4] }},
+            usableQty: {{ item[5] }},
+            expiredQty: {{ item[6] }},
+            noStockConcept: {{ 'true' if item[7] == 1 else 'false' }}
+        },
+        {% endfor %}
+    ];
+
+    const searchInput = document.getElementById('itemSearchInput');
+    const searchResults = document.getElementById('searchResults');
+    const selectedBody = document.getElementById('selectedItemsBody');
+    const emptyRow = document.getElementById('emptyRow');
+    const grandTotalEl = document.getElementById('grandTotal');
+
+    // Tracks which price_list ids are currently added to this visit.
+    const selected = new Map(); // id -> { item, qty }
+
+    function formatMK(tambala) {
+        return 'MK ' + (tambala / 100).toFixed(2);
+    }
+
+    // price_list's price is for a whole PACK of item.defaultQuantity
+    // units (e.g. MK 2500 for a pack of 30 capsules) -- it is NOT a
+    // per-unit price. The line total must scale proportionally against
+    // however many units are actually prescribed, not multiply the pack
+    // price directly by quantity. This mirrors the exact same math the
+    // backend uses when actually saving the visit.
+    function calculateLineTotal(item, qty) {
+        const packQuantity = (item.defaultQuantity && item.defaultQuantity > 0) ? item.defaultQuantity : 1;
+        const pricePerUnit = item.price / packQuantity;
+        return Math.round(pricePerUnit * qty);
+    }
+
+    // Recalculates and displays the grand total from current state,
+    // WITHOUT rebuilding the table rows -- safe to call while a qty
+    // input is focused, since it never touches the input elements.
+    function updateGrandTotalOnly() {
+        let grandTotal = 0;
+        selected.forEach((entry) => {
+            grandTotal += calculateLineTotal(entry.item, entry.qty);
+        });
+        grandTotalEl.textContent = formatMK(grandTotal);
+    }
+
+    function isSelectable(item) {
+        // Blocked only when there IS a stock concept and NOTHING usable
+        // remains. Partially-expired-but-still-stocked items are fine --
+        // deduction will draw from the non-expired batch first later.
+        if (item.noStockConcept) return true;
+        return item.usableQty > 0;
+    }
+
+    function closeSearchResults() {
+        searchResults.style.display = 'none';
+        searchResults.innerHTML = '';
+    }
+
+    function renderSelectedTable() {
+        selectedBody.innerHTML = '';
+
+        if (selected.size === 0) {
+            selectedBody.appendChild(emptyRow);
+            grandTotalEl.textContent = formatMK(0);
+            return;
+        }
+
+        let grandTotal = 0;
+
+        selected.forEach((entry, id) => {
+            const { item, qty } = entry;
+            const lineTotal = calculateLineTotal(item, qty);
+            grandTotal += lineTotal;
+
+            const tr = document.createElement('tr');
+
+            const expiredNote = (!item.noStockConcept && item.expiredQty > 0 && item.usableQty > 0)
+                ? ' <small class="text-warning">(some stock expired)</small>'
+                : '';
+
+            tr.innerHTML = `
+                <td><span class="badge bg-info text-dark">${item.type}</span></td>
+                <td><strong>${item.name}</strong>${expiredNote}
+                    <input type="hidden" name="selected_items" value="${id}">
+                </td>
+                <td class="text-end">${formatMK(item.price)} <small class="text-muted">/${item.defaultQuantity}</small></td>
+                <td>
+                    <input type="number" name="qty_${id}" class="form-control qty-input" value="${qty}" data-id="${id}" style="font-size: 1.1rem; padding: 0.5rem; min-width: 100px;">
+                </td>
+                <td class="text-end line-total">${formatMK(lineTotal)}</td>
+                <td class="text-end">
+                    <button type="button" class="btn btn-outline-danger btn-sm remove-item-btn" data-id="${id}">✕</button>
+                </td>
+            `;
+            selectedBody.appendChild(tr);
+        });
+
+        grandTotalEl.textContent = formatMK(grandTotal);
+
+        // Wire up qty changes and remove buttons for the rows just rendered.
+        //
+        // IMPORTANT: typing in the qty box must NOT call renderSelectedTable()
+        // on every keystroke -- that destroys and recreates this exact input
+        // element, which steals focus and dismisses the mobile keyboard mid-type.
+        // Instead, just update this row's line-total and the grand total in
+        // place, and only validate/clamp the value once the person is done
+        // editing (on blur), not while they're actively typing or deleting.
+        selectedBody.querySelectorAll('.qty-input').forEach(input => {
+            input.addEventListener('input', function () {
+                const id = this.getAttribute('data-id');
+                const entry = selected.get(id);
+                if (!entry) return;
+
+                const raw = parseInt(this.value, 10);
+                const row = this.closest('tr');
+
+                if (!isNaN(raw) && raw >= 1) {
+                    // Valid positive number -- commit it as the real
+                    // quantity and show its true line total.
+                    entry.qty = raw;
+                    const lineTotal = calculateLineTotal(entry.item, entry.qty);
+                    row.querySelector('.line-total').textContent = formatMK(lineTotal);
+                    updateGrandTotalOnly();
+                } else {
+                    // Empty, 0, negative, or non-numeric: this can NEVER
+                    // be committed or submitted (entry.qty is left
+                    // untouched, and blur below will clamp it back up to
+                    // 1) -- but the line total should still visibly show
+                    // MK 0.00 right now rather than a stale leftover
+                    // total, so what's on screen matches what's actually
+                    // typed.
+                    row.querySelector('.line-total').textContent = formatMK(0);
+                }
+            });
+
+            input.addEventListener('blur', function () {
+                const id = this.getAttribute('data-id');
+                const entry = selected.get(id);
+                if (!entry) return;
+
+                // Now that editing is finished, clamp anything invalid/empty
+                // back to a sane value and do a full re-render to keep
+                // everything in sync.
+                let qty = parseInt(this.value, 10);
+                if (isNaN(qty) || qty < 1) qty = 1;
+                entry.qty = qty;
+                renderSelectedTable();
+            });
+        });
+
+        selectedBody.querySelectorAll('.remove-item-btn').forEach(btn => {
+            btn.addEventListener('click', function () {
+                const id = this.getAttribute('data-id');
+                selected.delete(id);
+                renderSelectedTable();
+            });
+        });
+    }
+
+    function addItem(item) {
+        if (!isSelectable(item)) return; // safety net; UI already prevents this
+        if (selected.has(item.id)) {
+            // Already added -- just bump quantity by 1 instead of duplicating
+            selected.get(item.id).qty += 1;
+        } else {
+            // Default to this item's "Quantity in Pack" from the price
+            // list (e.g. a syrup priced per bottle of 100ml might default
+            // to 1, but a price entry covering a strip of 10 tablets
+            // might default to 10) rather than always starting at 1.
+            // Guard against a missing/non-positive default just in case.
+            const startingQty = (item.defaultQuantity && item.defaultQuantity >= 1) ? item.defaultQuantity : 1;
+            selected.set(item.id, { item: item, qty: startingQty });
+        }
+        renderSelectedTable();
+        searchInput.value = '';
+        closeSearchResults();
+        searchInput.focus();
+    }
+
+    searchInput.addEventListener('input', function () {
+        const query = this.value.trim().toLowerCase();
+        if (query.length === 0) { closeSearchResults(); return; }
+
+        const matches = allItems.filter(item => item.name.toLowerCase().includes(query));
+
+        searchResults.innerHTML = '';
+
+        if (matches.length === 0) {
+            searchResults.innerHTML = '<div class="p-3 text-muted small">No matches found.</div>';
+            searchResults.style.display = 'block';
+            return;
+        }
+
+        matches.forEach(item => {
+            const selectable = isSelectable(item);
+            const div = document.createElement('div');
+            div.className = 'p-2 border-bottom' + (selectable ? ' bg-white' : ' bg-light text-muted');
+            div.style.cursor = selectable ? 'pointer' : 'not-allowed';
+
+            let statusBadge = '';
+            if (!item.noStockConcept) {
+                if (item.usableQty > 0 && item.expiredQty === 0) {
+                    statusBadge = '<span class="badge bg-success ms-1">✅ Available</span>';
+                } else if (item.usableQty > 0 && item.expiredQty > 0) {
+                    statusBadge = '<span class="badge bg-success ms-1">✅ Available</span><span class="badge bg-warning text-dark ms-1">⚠️ Some expired</span>';
+                } else if (item.usableQty === 0 && item.expiredQty > 0) {
+                    statusBadge = '<span class="badge ms-1" style="background-color:#6f0000;color:#fff;">⛔ Expired - cannot select</span>';
+                } else {
+                    statusBadge = '<span class="badge bg-secondary ms-1">🚫 Out of stock</span>';
+                }
+            }
+
+            div.innerHTML = `<strong>${item.name}</strong> <small class="text-muted">(${item.type}, ${formatMK(item.price)} per pack of ${item.defaultQuantity})</small> ${statusBadge}`;
+
+            if (selectable) {
+                div.addEventListener('click', () => addItem(item));
+            }
+
+            searchResults.appendChild(div);
+        });
+
+        searchResults.style.display = 'block';
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!searchResults.contains(e.target) && e.target !== searchInput) {
+            closeSearchResults();
+        }
+    });
+
+    // Require at least one item before allowing submit
+    document.getElementById('visitForm').addEventListener('submit', function (e) {
+        if (selected.size === 0) {
+            e.preventDefault();
+            alert('Add at least one item (consultation, drug, test, or procedure) before saving.');
+            return;
+        }
+
+        // Don't rely solely on the blur handler having already fixed up
+        // every quantity field -- if someone taps Save while a field is
+        // still showing 0, empty, or something invalid (without that
+        // field ever losing focus first), catch it here too. This reads
+        // the live DOM value directly rather than trusting `selected`,
+        // since `selected` may still hold a stale committed value if the
+        // person never typed anything valid for this row at all.
+        const qtyInputs = document.querySelectorAll('.qty-input');
+        for (const input of qtyInputs) {
+            const qty = parseInt(input.value, 10);
+            if (isNaN(qty) || qty < 1) {
+                e.preventDefault();
+                alert('Every item needs a quantity of at least 1. Please fix the highlighted field.');
+                input.classList.add('is-invalid');
+                input.focus();
+                return;
+            }
+        }
+    });
+});
+</script>
+{% endblock %}
