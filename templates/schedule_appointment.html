@@ -1,0 +1,57 @@
+{% extends 'layout.html' %}
+{% block content %}
+<div class="row mx-auto" style="max-width: 600px;">
+    <div class="col-12">
+        <h3 class="mb-4 text-dark border-bottom pb-2">📅 Schedule Appointment</h3>
+        <form action="/appointments/schedule" method="POST">
+            <div class="mb-3">
+                <label class="form-label fw-bold">Patient</label>
+                <select name="patient_id" id="patientSelect" class="form-select">
+                    <option value="">-- Select Existing Patient --</option>
+                    {% for p in patients %}
+                    <option value="{{ p[0] }}">{{ p[1] }} ({{ p[2] }})</option>
+                    {% endfor %}
+                </select>
+                <div class="mt-2 text-center text-muted">OR</div>
+            </div>
+
+            <div class="card bg-light mb-3 p-3">
+                <h6>Register New Patient</h6>
+                <div class="mb-2">
+                    <input type="text" name="new_name" class="form-control" placeholder="Full Name">
+                </div>
+                <div class="row mb-2">
+                    <div class="col-6"><input type="date" name="new_dob" class="form-control"></div>
+                    <div class="col-6">
+                        <select name="new_sex" class="form-select">
+                            <option value="Male">Male</option>
+                            <option value="Female">Female</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="mb-2">
+                    <input type="text" name="new_phone" class="form-control" placeholder="Phone">
+                </div>
+                <div>
+                    <input type="text" name="new_location" class="form-control" placeholder="Location">
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label fw-bold">Appointment Date & Time</label>
+                <input type="datetime-local" name="appointment_date" class="form-control" required>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label fw-bold">Reason</label>
+                <input type="text" name="reason" class="form-control" placeholder="e.g. Follow-up, Malaria test">
+            </div>
+
+            <div class="d-flex gap-2">
+                <a href="/appointments" class="btn btn-secondary">Cancel</a>
+                <button type="submit" class="btn btn-success w-100">Schedule Appointment</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

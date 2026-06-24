@@ -61,9 +61,16 @@
                 
                 <!-- FIX: Clean Action button that fits on mobile -->
                 <td class="text-end">
-                    <a href="/visit/{{ patient[0] }}" class="btn btn-primary btn-sm" style="white-space: nowrap;">
-                        📋 Open
-                    </a>
+                    <!-- If status is Pending, go to review. If Waiting, go to visit. -->
+{% if patient[5] == 'Pending' %}
+    <a href="/appointments/review/{{ patient[0] }}" class="btn btn-outline-warning btn-sm" style="white-space: nowrap;">
+        📋 Review
+    </a>
+{% else %}
+    <a href="/visit/{{ patient[0] }}" class="btn btn-primary btn-sm" style="white-space: nowrap;">
+        📋 Open
+    </a>
+{% endif %}
                 </td>
             </tr>
             {% else %}

@@ -1,0 +1,146 @@
+{% extends 'layout.html' %}
+{% block content %}
+<style>
+    .bg-purple {
+        background-color: #6f42c1 !important;
+        color: white !important;
+    }
+</style>
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
+            <h3 class="mb-0">📅 Appointments</h3>
+            <a href="/appointments/schedule" class="btn btn-success btn-sm">➕ Schedule New</a>
+        </div>
+
+        <div class="mb-3">
+            <input type="text" id="apptSearchInput" class="form-control" placeholder="🔍 Search by patient name..." autocomplete="off">
+        </div>
+
+        <div class="table-responsive">
+            <table class="table table-striped table-hover align-middle">
+                <thead class="table-dark">
+                    <tr>
+                        <th>Patient</th>
+                        <th>Date & Time</th>
+                        <th>Reason</th>
+                        <th>Status</th>
+                        <th class="text-end">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for appt in appointments %}
+                    <tr data-name="{{ appt[8]|lower }}">
+                        <td><strong>{{ appt[8] }}</strong><br><small class="text-muted">{{ appt[9] }}</small></td>
+                        <td>{{ appt[1][:16] }}</td>
+                        <td><small>{{ appt[4] }}</small></td>
+                        <td>
+                            {% if appt[3] == 'Pending' %}
+                                <span class="badge bg-purple">Pending</span>
+                            {% elif appt[3] == 'Scheduled' %}
+                                <span class="badge bg-success">Scheduled</span>
+                            {% elif appt[3] == 'Cancelled' %}
+                                <span class="badge bg-danger">Cancelled</span>
+                            {% elif appt[3] == 'Missed' %}
+                                <span class="badge bg-secondary">Missed</span>
+                            {% else %}
+                                <span class="badge bg-info text-dark">{{ appt[3] }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            <!-- Doctor: Confirm (only shows when status is Pending) -->
+                            {% if appt[3] == 'Pending' and role|lower == 'doctor' %}
+                            <button class="btn btn-success btn-sm confirm-btn" data-id="{{ appt[0] }}">✅ Confirm</button>
+                            {% endif %}
+
+                            <!-- Receptionist: Check In (only shows when status is Scheduled) -->
+                            {% if appt[3] == 'Scheduled' %}
+                            <button class="btn btn-primary btn-sm checkin-btn" data-id="{{ appt[0] }}">🚪 Check In</button>
+                            {% endif %}
+
+                            <!-- Reschedule / Cancel / Missed -->
+                            <button class="btn btn-outline-warning btn-sm reschedule-btn" data-id="{{ appt[0] }}" data-date="{{ appt[1] }}">📅 Resched</button>
+                            <button class="btn btn-outline-danger btn-sm cancel-btn" data-id="{{ appt[0] }}">❌ Cancel</button>
+                            {% if appt[3] == 'Pending' or appt[3] == 'Scheduled' %}
+                            <button class="btn btn-outline-secondary btn-sm miss-btn" data-id="{{ appt[0] }}">⏳ Missed</button>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="text-center text-muted py-4">No scheduled appointments.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Search functionality
+    const searchInput = document.getElementById('apptSearchInput');
+    const rows = document.querySelectorAll('table tbody tr[data-name]');
+
+    searchInput.addEventListener('input', function() {
+        const query = this.value.trim().toLowerCase();
+        rows.forEach((row) => {
+            const matches = row.getAttribute('data-name').includes(query);
+            row.style.display = matches ? '' : 'none';
+        });
+    });
+
+    // Actions
+    function postAction(id, action, extra={}) {
+        return fetch('/appointments/update/' + id, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: action, ...extra })
+        }).then(res => res.json());
+    }
+
+    document.querySelectorAll('.confirm-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            if(confirm('Confirm this appointment?')) {
+                postAction(this.dataset.id, 'confirm').then(() => location.reload());
+            }
+        });
+    });
+
+    document.querySelectorAll('.checkin-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            if(confirm('Check in this patient? They will move to the Active Queue.')) {
+                postAction(this.dataset.id, 'check_in').then(() => location.reload());
+            }
+        });
+    });
+
+    document.querySelectorAll('.miss-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            if(confirm('Mark this appointment as Missed?')) {
+                postAction(this.dataset.id, 'missed').then(() => location.reload());
+            }
+        });
+    });
+
+    document.querySelectorAll('.cancel-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const reason = prompt('Reason for cancellation:');
+            if(reason !== null) {
+                postAction(this.dataset.id, 'cancel', { reason: reason }).then(() => location.reload());
+            }
+        });
+    });
+
+    document.querySelectorAll('.reschedule-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const newDate = prompt('Enter new date (YYYY-MM-DD HH:MM):', this.dataset.date);
+            if(newDate) {
+                postAction(this.dataset.id, 'reschedule', { new_date: newDate }).then(() => location.reload());
+            }
+        });
+    });
+});
+</script>
+{% endblock %}

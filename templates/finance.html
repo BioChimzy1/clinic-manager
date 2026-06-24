@@ -1,0 +1,206 @@
+{% extends 'layout.html' %}
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
+            <h3 class="mb-0">📊 Finance & Reports</h3>
+            <div class="btn-group">
+                <a href="/finance?period=today" class="btn btn-sm {{ 'btn-dark' if period == 'today' else 'btn-outline-dark' }}">Today</a>
+                <a href="/finance?period=week" class="btn btn-sm {{ 'btn-dark' if period == 'week' else 'btn-outline-dark' }}">Week</a>
+                <a href="/finance?period=month" class="btn btn-sm {{ 'btn-dark' if period == 'month' else 'btn-outline-dark' }}">Month</a>
+            </div>
+        </div>
+
+        <!-- Stats Cards -->
+        <div class="row g-3 mb-4">
+            <div class="col-md-4">
+                <div class="card shadow-sm p-3 border-start border-4 border-success">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <small class="text-muted">Total Cash</small>
+                            <h4 class="mb-0 text-success">MK {{ "%.2f"|format(total_cash / 100) }}</h4>
+                        </div>
+                        <span class="display-6 text-success">💰</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card shadow-sm p-3 border-start border-4 border-warning">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <small class="text-muted">Outstanding Loans</small>
+                            <h4 class="mb-0 text-warning">MK {{ "%.2f"|format(outstanding_loans / 100) }}</h4>
+                        </div>
+                        <span class="display-6 text-warning">📋</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card shadow-sm p-3 border-start border-4 border-info">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <small class="text-muted">Discounts Given</small>
+                            <h4 class="mb-0 text-info">MK {{ "%.2f"|format(total_discounts / 100) }}</h4>
+                        </div>
+                        <span class="display-6 text-info">🏷️</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card shadow-sm p-3 border-start border-4 border-primary">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <small class="text-muted">Net Revenue</small>
+                            <h4 class="mb-0 text-primary">MK {{ "%.2f"|format(net_revenue / 100) }}</h4>
+                        </div>
+                        <span class="display-6 text-primary">📈</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card shadow-sm p-3 border-start border-4 border-secondary">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <small class="text-muted">Total Expenses</small>
+                            <h4 class="mb-0 text-secondary">MK {{ "%.2f"|format(total_expenses / 100) }}</h4>
+                        </div>
+                        <span class="display-6 text-secondary">💸</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card shadow-sm p-3 border-start border-4 {{ 'border-success' if net_profit >= 0 else 'border-danger' }}">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <small class="text-muted">Net Profit</small>
+                            <h4 class="mb-0 {{ 'text-success' if net_profit >= 0 else 'text-danger' }}">MK {{ "%.2f"|format(net_profit / 100) }}</h4>
+                        </div>
+                        <span class="display-6 {{ 'text-success' if net_profit >= 0 else 'text-danger' }}">📊</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Transactions & Expenses -->
+        <div class="row">
+            <div class="col-md-7">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-dark text-white">
+                        <h6 class="mb-0">Recent Transactions</h6>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-sm table-striped mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Patient</th>
+                                        <th>Date</th>
+                                        <th class="text-end">Total</th>
+                                        <th class="text-end">Paid</th>
+                                        <th class="text-end">Discount</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for txn in recent_transactions %}
+                                    <tr>
+                                        <td><strong>{{ txn[0] }}</strong></td>
+                                        <td><small>{{ txn[1][:10] }}</small></td>
+                                        <td class="text-end">MK {{ "%.2f"|format(txn[2] / 100) }}</td>
+                                        <td class="text-end">MK {{ "%.2f"|format(txn[3] / 100) }}</td>
+                                        <td class="text-end">MK {{ "%.2f"|format(txn[4] / 100) }}</td>
+                                        <td>
+                                            <span class="badge {{ 'bg-success' if txn[5] == 'Paid' else 'bg-info text-dark' }}">
+                                                {{ txn[5] }}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                    {% else %}
+                                    <tr>
+                                        <td colspan="6" class="text-center text-muted py-3">No transactions yet.</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-5">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0">💸 Expenses</h6>
+                        <button class="btn btn-sm btn-success" type="button" data-bs-toggle="collapse" data-bs-target="#addExpenseForm">
+                            ➕ Add
+                        </button>
+                    </div>
+                    <div class="collapse" id="addExpenseForm">
+                        <div class="card-body bg-light">
+                            <form action="/finance/add_expense" method="POST">
+                                <div class="mb-2">
+                                    <label class="form-label small fw-bold">Date</label>
+                                    <input type="date" name="expense_date" class="form-control form-control-sm" required>
+                                </div>
+                                <div class="mb-2">
+                                    <label class="form-label small fw-bold">Category</label>
+                                    <select name="category" class="form-select form-select-sm">
+                                        <option value="Transport">Transport</option>
+                                        <option value="Utilities">Utilities (Electricity/Water)</option>
+                                        <option value="Supplies">Medical Supplies</option>
+                                        <option value="Staff">Staff Welfare</option>
+                                        <option value="Other">Other</option>
+                                    </select>
+                                </div>
+                                <div class="mb-2">
+                                    <label class="form-label small fw-bold">Description</label>
+                                    <input type="text" name="description" class="form-control form-control-sm" placeholder="e.g. Fuel for pickup" required>
+                                </div>
+                                <div class="mb-2">
+                                    <label class="form-label small fw-bold">Amount (MK)</label>
+                                    <input type="number" step="0.01" name="amount" class="form-control form-control-sm" placeholder="e.g. 500.00" required>
+                                </div>
+                                <button type="submit" class="btn btn-success btn-sm w-100">Save Expense</button>
+                            </form>
+                        </div>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-sm table-striped mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Date</th>
+                                        <th>Category</th>
+                                        <th>Description</th>
+                                        <th class="text-end">Amount</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for exp in recent_expenses %}
+                                    <tr>
+                                        <td><small>{{ exp[1][:10] }}</small></td>
+                                        <td><span class="badge bg-secondary">{{ exp[2] }}</span></td>
+                                        <td><small>{{ exp[3] }}</small></td>
+                                        <td class="text-end text-danger">MK {{ "%.2f"|format(exp[4] / 100) }}</td>
+                                        <td class="text-end">
+                                            <form action="/finance/delete_expense/{{ exp[0] }}" method="POST" style="display:inline;">
+                                                <button type="submit" class="btn btn-outline-danger btn-sm py-0 px-2" onclick="return confirm('Delete this expense?')">✕</button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                    {% else %}
+                                    <tr>
+                                        <td colspan="5" class="text-center text-muted py-3">No expenses recorded.</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

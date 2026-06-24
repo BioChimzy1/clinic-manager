@@ -78,6 +78,7 @@ def init_db():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_patients_clinic ON patients(clinic_id);')
     
         # 4. appointments (NEW: Includes appointment_type)
+        # 4. appointments (Updated with new columns)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS appointments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,6 +90,8 @@ def init_db():
             appointment_type TEXT DEFAULT 'Walk-In',
             reason TEXT,
             status TEXT DEFAULT 'Scheduled',
+            check_in_time TEXT,
+            cancelled_reason TEXT,
             created_at TEXT,
             updated_at TEXT,
             is_synced INTEGER DEFAULT 0,
@@ -101,6 +104,7 @@ def init_db():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_appointments_clinic ON appointments(clinic_id);')
     
     # 5. visits
+        # 5. visits (Updated with discount and loan columns)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS visits (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -115,6 +119,9 @@ def init_db():
             total_fee INTEGER DEFAULT 0,
             amount_paid INTEGER DEFAULT 0,
             loan_witness TEXT,
+            discount_amount INTEGER DEFAULT 0,
+            discount_reason TEXT,
+            loan_due_date TEXT,
             status TEXT DEFAULT 'Open',
             is_active INTEGER DEFAULT 1,
             created_at TEXT,
@@ -212,12 +219,14 @@ def init_db():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_price_list_inventory ON price_list(inventory_id);')
     
     # 10. expenses
+        # 10. expenses (Updated with new category column)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS expenses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             uuid TEXT UNIQUE,
             clinic_id INTEGER,
             expense_date TEXT NOT NULL,
+            category TEXT DEFAULT 'Other',
             description TEXT NOT NULL,
             amount INTEGER NOT NULL,
             created_at TEXT,
@@ -362,6 +371,238 @@ def queue():
     conn.close()
     
     return render_template('queue.html', queue=queue_list, total_in_queue=len(queue_list))
+    
+# ------------------------------------------------------------------
+# APPOINTMENT MANAGEMENT
+# ------------------------------------------------------------------
+@app.route('/appointments')
+def appointments():
+    """View all scheduled appointments"""
+    allowed_roles = ['admin', 'cashier', 'doctor', 'receptionist']
+    user_role = session.get('role', '').lower()
+    if user_role not in allowed_roles:
+        flash('Permission denied.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+
+    # Get appointments that are NOT in the active queue
+    # Statuses: Pending (waiting for doctor), Scheduled (confirmed), Cancelled, Missed
+    cursor.execute('''
+        SELECT 
+            appointments.id,
+            appointments.appointment_date,
+            appointments.appointment_type,
+            appointments.status,
+            appointments.reason,
+            appointments.cancelled_reason,
+            appointments.check_in_time,
+            patients.id AS patient_id,
+            patients.name AS patient_name,
+            patients.phone,
+            patients.sex
+        FROM appointments
+        JOIN patients ON appointments.patient_id = patients.id
+        WHERE appointments.status NOT IN ('Waiting', 'Pending', 'In Progress', 'Completed')
+        ORDER BY appointments.appointment_date ASC
+    ''')
+    appointment_list = cursor.fetchall()
+    conn.close()
+
+    return render_template('appointments.html', appointments=appointment_list, role=session.get('role'))
+
+
+@app.route('/appointments/schedule', methods=['GET', 'POST'])
+def schedule_appointment():
+    """Schedule a new appointment for an existing or new patient"""
+    allowed_roles = ['admin', 'cashier', 'doctor', 'receptionist']
+    user_role = session.get('role', '').lower()
+    if user_role not in allowed_roles:
+        flash('Permission denied.', 'danger')
+        return redirect(url_for('dashboard'))
+    
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+
+    if request.method == 'POST':
+        # Get existing patient ID or register a new one on the fly
+        patient_id = request.form.get('patient_id')
+        if not patient_id or patient_id == '':
+            # Register new patient right here
+            name = request.form['new_name']
+            dob = request.form['new_dob']
+            sex = request.form['new_sex']
+            phone = request.form['new_phone']
+            location = request.form['new_location']
+            
+            cursor.execute('''
+                INSERT INTO patients (uuid, clinic_id, name, date_of_birth, sex, phone, location, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (str(uuid.uuid4()), 1, name, dob, sex, phone, location, datetime.datetime.now().isoformat()))
+            patient_id = cursor.lastrowid
+        
+        appointment_date = request.form['appointment_date']
+        reason = request.form.get('reason', 'Consultation')
+
+        # STATUS IS "Pending" - waiting for doctor confirmation
+        cursor.execute('''
+            INSERT INTO appointments (uuid, clinic_id, patient_id, doctor_id, appointment_date, appointment_type, reason, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (str(uuid.uuid4()), 1, patient_id, 1, appointment_date, 'Appointment', reason, 'Pending', datetime.datetime.now().isoformat()))
+        
+        conn.commit()
+        conn.close()
+        flash('Appointment scheduled successfully! Status: Pending (waiting for doctor confirmation).', 'success')
+        return redirect(url_for('appointments'))
+    
+    # GET: Load existing patients for the dropdown
+    cursor.execute("SELECT id, name, phone FROM patients WHERE is_active = 1 ORDER BY name")
+    patients = cursor.fetchall()
+    conn.close()
+
+    return render_template('schedule_appointment.html', patients=patients)
+
+
+@app.route('/appointments/update/<int:appt_id>', methods=['POST'])
+def update_appointment(appt_id):
+    """Update appointment status (Confirm, Cancel, Reschedule, Missed, Check In)"""
+    allowed_roles = ['admin', 'cashier', 'doctor', 'receptionist']
+    user_role = session.get('role', '').lower()
+    if user_role not in allowed_roles:
+        flash('Permission denied.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    data = request.get_json()
+    action = data.get('action')
+    now = datetime.datetime.now().isoformat()
+
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+
+    if action == 'confirm':
+        # Doctor confirms the appointment -> Scheduled
+        cursor.execute('''
+            UPDATE appointments SET status = 'Scheduled', updated_at = ? WHERE id = ?
+        ''', (now, appt_id))
+        message = "Appointment confirmed and scheduled."
+
+    elif action == 'cancel':
+        reason = data.get('reason', 'No reason provided')
+        cursor.execute('''
+            UPDATE appointments SET status = 'Cancelled', cancelled_reason = ?, updated_at = ? WHERE id = ?
+        ''', (reason, now, appt_id))
+        message = "Appointment cancelled."
+
+    elif action == 'reschedule':
+        new_date = data.get('new_date')
+        cursor.execute('''
+            UPDATE appointments SET appointment_date = ?, status = 'Pending', updated_at = ? WHERE id = ?
+        ''', (new_date, now, appt_id))
+        message = "Appointment rescheduled. Needs doctor confirmation again."
+
+    elif action == 'missed':
+        cursor.execute('''
+            UPDATE appointments SET status = 'Missed', updated_at = ? WHERE id = ?
+        ''', (now, appt_id))
+        message = "Appointment marked as Missed."
+
+    elif action == 'check_in':
+        # Check in the patient -> Move to Active Queue (Waiting)
+        cursor.execute('''
+            UPDATE appointments SET status = 'Waiting', check_in_time = ?, updated_at = ? WHERE id = ?
+        ''', (now, now, appt_id))
+        message = "Patient checked in! Added to Active Queue."
+
+    else:
+        conn.close()
+        return {'success': False, 'error': 'Invalid action'}
+
+    conn.commit()
+    conn.close()
+    return {'success': True, 'message': message} 
+    
+    
+@app.route('/appointments/review/<int:patient_id>', methods=['GET', 'POST'])
+def review_appointment(patient_id):
+    """Doctor reviews a pending appointment before confirming it"""
+    allowed_roles = ['admin', 'cashier', 'doctor']
+    user_role = session.get('role', '').lower()
+    if user_role not in allowed_roles:
+        flash('Permission denied.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+
+    # Fetch the pending patient details
+    cursor.execute('''
+        SELECT patients.id, patients.name, patients.sex, patients.date_of_birth, patients.phone,
+               appointments.id, appointments.appointment_date, appointments.reason, appointments.status
+        FROM patients
+        JOIN appointments ON patients.id = appointments.patient_id
+        WHERE patients.id = ? AND appointments.status = 'Pending'
+        ORDER BY appointments.created_at DESC
+        LIMIT 1
+    ''', (patient_id,))
+    row = cursor.fetchone()
+
+    if row is None:
+        conn.close()
+        flash('This patient is not currently pending confirmation.', 'warning')
+        return redirect(url_for('queue'))
+
+    (p_id, p_name, p_sex, p_dob, p_phone, appt_id, appt_date, appt_reason, appt_status) = row
+
+    if request.method == 'POST':
+        action = request.form.get('action')
+        now = datetime.datetime.now().isoformat()
+
+        if action == 'confirm':
+            # Confirm -> Status becomes Scheduled (removes from Active Queue)
+            cursor.execute('''
+                UPDATE appointments SET status = 'Scheduled', updated_at = ? WHERE id = ?
+            ''', (now, appt_id))
+            conn.commit()
+            conn.close()
+            flash(f'Appointment confirmed for {p_name}. Patient moved to Appointments list.', 'success')
+            return redirect(url_for('queue'))
+
+        elif action == 'cancel':
+            reason = request.form.get('reason', 'No reason provided')
+            cursor.execute('''
+                UPDATE appointments SET status = 'Cancelled', cancelled_reason = ?, updated_at = ? WHERE id = ?
+            ''', (reason, now, appt_id))
+            conn.commit()
+            conn.close()
+            flash(f'Appointment cancelled for {p_name}.', 'info')
+            return redirect(url_for('queue'))
+
+        elif action == 'reschedule':
+            new_date = request.form.get('new_date')
+            if new_date:
+                cursor.execute('''
+                    UPDATE appointments SET appointment_date = ?, status = 'Pending', updated_at = ? WHERE id = ?
+                ''', (new_date, now, appt_id))
+                conn.commit()
+                conn.close()
+                flash(f'Appointment rescheduled for {p_name}. Still pending confirmation.', 'info')
+                return redirect(url_for('queue'))
+            else:
+                flash('Please provide a new date for rescheduling.', 'warning')
+
+    conn.close()
+
+    return render_template(
+        'review_appointment.html',
+        patient_id=p_id,
+        patient_name=p_name,
+        patient_sex=p_sex,
+        patient_dob=p_dob,
+        patient_phone=p_phone,
+        appointment_date=appt_date,
+        appointment_reason=appt_reason
+    )    
     
 # ------------------------------------------------------------------
 # INVENTORY MANAGEMENT (Add & Edit)
@@ -730,7 +971,7 @@ def visit(patient_id):
                appointments.id, appointments.appointment_type, appointments.status
         FROM patients
         JOIN appointments ON patients.id = appointments.patient_id
-        WHERE patients.id = ? AND appointments.status IN ('Waiting', 'Pending')
+        WHERE patients.id = ? AND appointments.status IN ('Waiting', 'Pending', 'Scheduled') 
         ORDER BY appointments.created_at DESC
         LIMIT 1
     ''', (patient_id,))
@@ -738,7 +979,7 @@ def visit(patient_id):
 
     if row is None:
         conn.close()
-        flash('This patient is not currently in the active queue.', 'warning')
+        flash('This patient is not in the active queue (Status must be Waiting, Pending, or Scheduled).', 'warning')   <--- CHANGED
         return redirect(url_for('queue'))
 
     (p_id, p_name, p_sex, p_dob, appointment_id, appointment_type, appointment_status) = row
@@ -1264,6 +1505,176 @@ def add_loan_payment(visit_id):
         return {'success': False, 'error': str(e)}
 
 # ------------------------------------------------------------------
+# FINANCE & REPORTING DASHBOARD
+# ------------------------------------------------------------------
+@app.route('/finance')
+def finance():
+    """Finance dashboard with revenue, loans, discounts, and expenses"""
+    # Role check: only Admin, Cashier, Doctor can view finance (case-insensitive)
+    allowed_roles = ['admin', 'cashier', 'doctor']
+    user_role = session.get('role', '').lower()
+    if user_role not in allowed_roles:
+        flash('You do not have permission to access the Finance page.', 'danger')
+        return redirect(url_for('dashboard'))
+    
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    
+    # Get date range filter from query string (default to 'today')
+    period = request.args.get('period', 'today')
+    today = datetime.date.today()
+    
+    if period == 'today':
+        start_date = today.isoformat()
+        end_date = today.isoformat()
+    elif period == 'week':
+        start_date = (today - datetime.timedelta(days=7)).isoformat()
+        end_date = today.isoformat()
+    elif period == 'month':
+        start_date = (today - datetime.timedelta(days=30)).isoformat()
+        end_date = today.isoformat()
+    else:
+        start_date = (today - datetime.timedelta(days=7)).isoformat()
+        end_date = today.isoformat()
+        period = 'week'  # fallback
+    
+    # 1. Total Cash Collected (visits marked Paid, amount_paid within period)
+    cursor.execute('''
+        SELECT SUM(amount_paid) FROM visits 
+        WHERE status = 'Paid' 
+        AND updated_at >= ? AND updated_at <= ?
+    ''', (start_date, end_date + 'T23:59:59'))
+    total_cash = cursor.fetchone()[0] or 0
+    
+    # 2. Outstanding Loans (active loans, total remaining balance)
+    cursor.execute('''
+        SELECT SUM(total_fee - amount_paid) FROM visits 
+        WHERE status = 'Loan Active'
+    ''')
+    outstanding_loans = cursor.fetchone()[0] or 0
+    
+    # 3. Total Discounts Given (within period)
+    cursor.execute('''
+        SELECT SUM(discount_amount) FROM visits 
+        WHERE discount_amount > 0 
+        AND updated_at >= ? AND updated_at <= ?
+    ''', (start_date, end_date + 'T23:59:59'))
+    total_discounts = cursor.fetchone()[0] or 0
+    
+    # 4. Net Revenue (Cash - Discounts)
+    net_revenue = total_cash - total_discounts
+    
+    # 5. Total Expenses (within period)
+    cursor.execute('''
+        SELECT SUM(amount) FROM expenses 
+        WHERE expense_date >= ? AND expense_date <= ?
+    ''', (start_date, end_date))
+    total_expenses = cursor.fetchone()[0] or 0
+    
+    # 6. Net Profit (Net Revenue - Expenses)
+    net_profit = net_revenue - total_expenses
+    
+    # 7. Recent transactions (last 10 visits paid)
+    cursor.execute('''
+        SELECT 
+            patients.name,
+            visits.updated_at,
+            visits.total_fee,
+            visits.amount_paid,
+            visits.discount_amount,
+            visits.status
+        FROM visits
+        JOIN patients ON visits.patient_id = patients.id
+        WHERE visits.status = 'Paid' OR visits.status = 'Loan Active'
+        ORDER BY visits.updated_at DESC
+        LIMIT 10
+    ''')
+    recent_transactions = cursor.fetchall()
+    
+    # 8. Recent expenses (last 10)
+    cursor.execute('''
+        SELECT id, expense_date, category, description, amount
+        FROM expenses
+        ORDER BY expense_date DESC
+        LIMIT 10
+    ''')
+    recent_expenses = cursor.fetchall()
+    
+    conn.close()
+    
+    return render_template(
+        'finance.html',
+        period=period,
+        total_cash=total_cash,
+        outstanding_loans=outstanding_loans,
+        total_discounts=total_discounts,
+        net_revenue=net_revenue,
+        total_expenses=total_expenses,
+        net_profit=net_profit,
+        recent_transactions=recent_transactions,
+        recent_expenses=recent_expenses,
+        role=session.get('role')
+    )
+
+
+@app.route('/finance/add_expense', methods=['POST'])
+def add_expense():
+    """Add a new expense entry"""
+    allowed_roles = ['admin', 'cashier', 'doctor']
+    user_role = session.get('role', '').lower()
+    if user_role not in allowed_roles:
+        flash('Permission denied.', 'danger')
+        return redirect(url_for('dashboard'))
+    
+    expense_date = request.form.get('expense_date')
+    category = request.form.get('category', 'Other')
+    description = request.form.get('description', '').strip()
+    amount = request.form.get('amount')
+    
+    try:
+        amount = int(float(amount) * 100)  # Convert to Tambala
+    except (TypeError, ValueError):
+        flash('Invalid expense amount.', 'danger')
+        return redirect(url_for('finance'))
+    
+    if not expense_date or amount <= 0:
+        flash('Please fill in all required fields correctly.', 'danger')
+        return redirect(url_for('finance'))
+    
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        INSERT INTO expenses (uuid, clinic_id, expense_date, category, description, amount, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ''', (str(uuid.uuid4()), 1, expense_date, category, description, amount, datetime.datetime.now().isoformat()))
+    
+    conn.commit()
+    conn.close()
+    
+    flash('Expense added successfully!', 'success')
+    return redirect(url_for('finance'))
+
+
+@app.route('/finance/delete_expense/<int:expense_id>', methods=['POST'])
+def delete_expense(expense_id):
+    """Delete an expense entry"""
+    allowed_roles = ['admin', 'cashier', 'doctor']
+    user_role = session.get('role', '').lower()
+    if user_role not in allowed_roles:
+        flash('Permission denied.', 'danger')
+        return redirect(url_for('dashboard'))
+    
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM expenses WHERE id = ?", (expense_id,))
+    conn.commit()
+    conn.close()
+    
+    flash('Expense deleted.', 'success')
+    return redirect(url_for('finance'))
+
+# ------------------------------------------------------------------
 # STAFF MANAGEMENT (Coming Soon)
 # ------------------------------------------------------------------
 @app.route('/staff')
@@ -1284,9 +1695,7 @@ def dashboard():
 
     total_queue_count = waiting_count + pending_count
 
-    # "Seen Today" has no real data source yet (no completed/done status or
-    # timestamp exists until the Record Visit flow is built). Shown as a
-    # placeholder 0 for now, intentionally, until that feature exists.
+    # "Seen Today" has no real data source yet
     seen_today_count = 0
 
     # --- Inventory stats ---
@@ -1296,7 +1705,6 @@ def dashboard():
     cursor.execute("SELECT COUNT(*) FROM inventory WHERE is_active = 1 AND quantity <= min_alert_level")
     low_stock_count = cursor.fetchone()[0]
 
-    # "Expiring soon" = within the next 14 days (inclusive of today)
     today = datetime.date.today()
     cutoff = (today + datetime.timedelta(days=14)).isoformat()
     cursor.execute(
@@ -1313,8 +1721,20 @@ def dashboard():
     cursor.execute("SELECT COUNT(*) FROM visits WHERE status IN ('Ready for Cashier', 'Loan Active')")
     cashier_count = cursor.fetchone()[0]
 
+    # --- NEW: Total Cash Collected TODAY ---
+    today_start = today.isoformat()
+    today_end = today.isoformat() + 'T23:59:59'
+    cursor.execute('''
+        SELECT SUM(amount_paid) FROM visits 
+        WHERE status = 'Paid' 
+        AND updated_at >= ? AND updated_at <= ?
+    ''', (today_start, today_end))
+    today_cash_collected = cursor.fetchone()[0] or 0
+        # --- Appointments stats ---
+    cursor.execute("SELECT COUNT(*) FROM appointments WHERE status IN ('Pending', 'Scheduled')")
+    appointments_count = cursor.fetchone()[0]
     conn.close()
-
+    
     return render_template(
         'dashboard.html',
         role=session.get('role'),
@@ -1326,8 +1746,12 @@ def dashboard():
         low_stock_count=low_stock_count,
         expiring_soon_count=expiring_soon_count,
         priced_items_count=priced_items_count,
-        cashier_count=cashier_count
+        cashier_count=cashier_count,
+        today_cash_collected=today_cash_collected,
+        appointments_count=appointments_count  # <--- ADD THIS
     )
+    
+    
 
 # ------------------------------------------------------------------
 # RUN THE APP
