@@ -161,6 +161,15 @@ document.addEventListener('DOMContentLoaded', function () {
                 ? ' <small class="text-warning">(some stock expired)</small>'
                 : '';
 
+            // Items with no stock concept (Procedures, Consultation) have
+            // no real ceiling -- only cap the input when there's an
+            // actual usableQty to respect. The max attribute alone is a
+            // soft hint (some mobile keyboards/browsers don't enforce it
+            // strictly while typing), so the input/blur handlers below
+            // also clamp and warn explicitly -- this is the client-side
+            // half; the real enforcement is server-side on submit.
+            const maxAttr = item.noStockConcept ? '' : `max="${item.usableQty}"`;
+
             tr.innerHTML = `
                 <td><span class="badge bg-info text-dark">${item.type}</span></td>
                 <td><strong>${item.name}</strong>${expiredNote}
@@ -168,7 +177,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 </td>
                 <td class="text-end">${formatMK(item.price)} <small class="text-muted">/${item.defaultQuantity}</small></td>
                 <td>
-                    <input type="number" name="qty_${id}" class="form-control qty-input" value="${qty}" data-id="${id}" style="font-size: 1.1rem; padding: 0.5rem; min-width: 100px;">
+                    <input type="number" name="qty_${id}" class="form-control qty-input" value="${qty}" data-id="${id}" ${maxAttr} style="font-size: 1.1rem; padding: 0.5rem; min-width: 100px;">
+                    <small class="text-danger qty-over-limit-msg" style="display:none;"></small>
                 </td>
                 <td class="text-end line-total">${formatMK(lineTotal)}</td>
                 <td class="text-end">
@@ -196,14 +206,28 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 const raw = parseInt(this.value, 10);
                 const row = this.closest('tr');
+                const warningEl = row.querySelector('.qty-over-limit-msg');
+                const hasLimit = !entry.item.noStockConcept;
+                const limit = entry.item.usableQty;
 
                 if (!isNaN(raw) && raw >= 1) {
                     // Valid positive number -- commit it as the real
-                    // quantity and show its true line total.
+                    // quantity and show its true line total, regardless
+                    // of whether it's over the limit. We still let them
+                    // see the total update live; the warning (below) is
+                    // what tells them it won't be accepted as-is, and
+                    // blur will clamp it back down once they're done.
                     entry.qty = raw;
                     const lineTotal = calculateLineTotal(entry.item, entry.qty);
                     row.querySelector('.line-total').textContent = formatMK(lineTotal);
                     updateGrandTotalOnly();
+
+                    if (hasLimit && raw > limit) {
+                        warningEl.textContent = `Only ${limit} available`;
+                        warningEl.style.display = 'block';
+                    } else {
+                        warningEl.style.display = 'none';
+                    }
                 } else {
                     // Empty, 0, negative, or non-numeric: this can NEVER
                     // be committed or submitted (entry.qty is left
@@ -213,6 +237,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     // total, so what's on screen matches what's actually
                     // typed.
                     row.querySelector('.line-total').textContent = formatMK(0);
+                    warningEl.style.display = 'none';
                 }
             });
 
@@ -221,11 +246,19 @@ document.addEventListener('DOMContentLoaded', function () {
                 const entry = selected.get(id);
                 if (!entry) return;
 
-                // Now that editing is finished, clamp anything invalid/empty
-                // back to a sane value and do a full re-render to keep
-                // everything in sync.
+                // Now that editing is finished, clamp anything invalid,
+                // empty, or over-the-available-limit back to a sane
+                // value, then do a full re-render to keep everything in
+                // sync. Clamping down to the limit here (rather than
+                // leaving an over-limit number sitting in the box) keeps
+                // what's on screen always submittable -- the doctor can
+                // still raise it again right up to the real limit if
+                // more stock comes in before they hit Save.
                 let qty = parseInt(this.value, 10);
                 if (isNaN(qty) || qty < 1) qty = 1;
+                if (!entry.item.noStockConcept && qty > entry.item.usableQty) {
+                    qty = entry.item.usableQty;
+                }
                 entry.qty = qty;
                 renderSelectedTable();
             });

@@ -1081,6 +1081,19 @@ def visit(patient_id):
                 conn.close()
                 return redirect(url_for('visit', patient_id=patient_id))
 
+            # Block when the prescribed quantity exceeds what's actually
+            # usable. Being merely "in stock" (checked above) isn't
+            # enough on its own -- 1 unit in stock doesn't justify
+            # prescribing 60. This is a hard stop, not a clamp-down to
+            # whatever's available: silently saving a smaller quantity
+            # than what the doctor actually entered could understate a
+            # prescription without anyone noticing, which is worse than
+            # making them re-enter it.
+            if has_stock_concept and qty > usable_qty:
+                flash(f'"{pl_name}": only {usable_qty} unit(s) available, but {qty} were prescribed. Please adjust the quantity.', 'warning')
+                conn.close()
+                return redirect(url_for('visit', patient_id=patient_id))
+
             # price_list.price is the price for a whole PACK of
             # price_list.quantity units (e.g. MK 2500 for a pack of 30
             # capsules) -- it is NOT a per-unit price. If the doctor
@@ -1366,28 +1379,40 @@ def process_payment(visit_id):
         
         # ------------------------------------------------------------------
         # INVENTORY DEDUCTION: FEFO (First-Expired, First-Out)
-        # For each visit_item linked to inventory, deduct from the soonest-
-        # expiring batch first, spilling over to the next batch as needed.
+        # For each visit_item, deduct from the soonest-expiring active
+        # batch first, spilling over to the next batch as needed.
+        #
+        # IMPORTANT: we deduct by item NAME, not by visit_items.inventory_id.
+        # inventory_id is just whichever single batch the price_list entry
+        # happened to point at when it was first linked -- it does NOT
+        # track every batch of that drug. If that one batch later runs
+        # out and new stock arrives as a NEW inventory row (a new batch,
+        # which is the normal way to add stock with its own expiry date),
+        # visit_items.inventory_id keeps pointing at the now-empty old
+        # batch forever. Deducting strictly by id would then always find
+        # quantity=0 and silently deduct nothing, even though the drug is
+        # clearly in stock under a different batch. Matching by name
+        # (same normalization as the stock-check query on the visit form:
+        # LOWER(TRIM(item_name))) finds every batch for that drug, the
+        # same way the visit form already correctly finds stock.
         # ------------------------------------------------------------------
         cursor.execute('''
-            SELECT visit_items.inventory_id, visit_items.quantity, visit_items.item_name
+            SELECT visit_items.item_name, visit_items.quantity
             FROM visit_items
             WHERE visit_items.visit_id = ?
               AND visit_items.inventory_id IS NOT NULL
         ''', (visit_id,))
         items_to_deduct = cursor.fetchall()
         
-        for inv_id, qty_to_deduct, item_name in items_to_deduct:
-            if inv_id is None:
-                continue
-            
-            # Get all active batches for this inventory item, sorted by expiry
+        for item_name, qty_to_deduct in items_to_deduct:
+            # Get all active batches for this item by name, sorted by
+            # expiry so the soonest-expiring stock is used first.
             cursor.execute('''
                 SELECT id, quantity, expiry_date
                 FROM inventory
-                WHERE id = ? AND is_active = 1
+                WHERE LOWER(TRIM(item_name)) = LOWER(TRIM(?)) AND is_active = 1
                 ORDER BY expiry_date ASC
-            ''', (inv_id,))
+            ''', (item_name,))
             batches = cursor.fetchall()
             
             remaining = qty_to_deduct
@@ -1407,7 +1432,9 @@ def process_payment(visit_id):
                     remaining -= deduct
             
             if remaining > 0:
-                # This shouldn't happen if stock check was accurate, but log it
+                # Genuinely out of stock across every batch -- this is a
+                # real shortfall, not a matching bug, so it's still worth
+                # logging loudly.
                 print(f"WARNING: Could not fully deduct {item_name}, still {remaining} units short")
         
         conn.commit()
