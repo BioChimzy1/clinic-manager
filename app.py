@@ -965,13 +965,17 @@ def visit(patient_id):
     # Pending). A patient could in theory have older appointment rows
     # from past visits, but only the live one matters for opening a
     # new visit -- this mirrors exactly what the queue page itself
-    # already filters on.
+    # already filters on. 'Scheduled' is intentionally excluded: a
+    # scheduled appointment hasn't been checked in yet and never
+    # appears in the queue, so it has no business reaching the visit
+    # form either. It belongs in /appointments until check-in moves
+    # it to 'Waiting'.
     cursor.execute('''
         SELECT patients.id, patients.name, patients.sex, patients.date_of_birth,
                appointments.id, appointments.appointment_type, appointments.status
         FROM patients
         JOIN appointments ON patients.id = appointments.patient_id
-        WHERE patients.id = ? AND appointments.status IN ('Waiting', 'Pending', 'Scheduled') 
+        WHERE patients.id = ? AND appointments.status IN ('Waiting', 'Pending') 
         ORDER BY appointments.created_at DESC
         LIMIT 1
     ''', (patient_id,))
@@ -979,7 +983,7 @@ def visit(patient_id):
 
     if row is None:
         conn.close()
-        flash('This patient is not in the active queue (Status must be Waiting, Pending, or Scheduled).', 'warning')   <--- CHANGED
+        flash('This patient is not in the active queue (status must be Waiting or Pending). Scheduled appointments stay in the Appointments tab until checked in.', 'warning')
         return redirect(url_for('queue'))
 
     (p_id, p_name, p_sex, p_dob, appointment_id, appointment_type, appointment_status) = row
