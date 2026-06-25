@@ -985,6 +985,20 @@ def visit(patient_id):
     (p_id, p_name, p_sex, p_dob, appointment_id, appointment_type, appointment_status) = row
 
     if request.method == 'POST':
+        # Guard against double-submission (slow connection, accidental
+        # double-tap on Save, browser back-and-resubmit, etc). Once a
+        # visit is created for this appointment, the appointment moves
+        # to 'In Progress' below -- so if a visit already exists for
+        # this exact appointment_id, this POST is a duplicate of one
+        # that already succeeded, not a legitimate second visit. Catch
+        # it here, before doing any other work or touching inventory.
+        cursor.execute('SELECT id FROM visits WHERE appointment_id = ?', (appointment_id,))
+        existing_visit = cursor.fetchone()
+        if existing_visit is not None:
+            conn.close()
+            flash(f'A visit was already saved for {p_name}. Sent to cashier.', 'info')
+            return redirect(url_for('queue'))
+
         diagnosis = request.form.get('diagnosis', '').strip()
 
         if not diagnosis:
@@ -1231,6 +1245,27 @@ def process_payment(visit_id):
             return {'success': False, 'error': 'Visit is not in a payable state.'}
         
         now = datetime.datetime.now().isoformat()
+
+        # Atomically "claim" this visit for payment before doing anything
+        # else (status update, loan_payments insert, inventory deduction).
+        # The SELECT above can't prevent two near-simultaneous requests
+        # (e.g. a fast double-click on "Confirm & Complete") from both
+        # reading 'Ready for Cashier'/'Loan Active' before either commits
+        # -- both would then pass the check and BOTH would deduct
+        # inventory. This UPDATE...WHERE re-checks status in the same
+        # statement that changes it, so only the request that actually
+        # sees the still-unclaimed row gets rowcount=1 and proceeds; the
+        # other gets rowcount=0 and is rejected as already-processed.
+        cursor.execute('''
+            UPDATE visits SET status = 'Processing', updated_at = ?
+            WHERE id = ? AND status IN ('Ready for Cashier', 'Loan Active')
+        ''', (now, visit_id))
+
+        if cursor.rowcount == 0:
+            # Someone else (or another click from the same person) already
+            # claimed this visit for payment a moment ago.
+            conn.close()
+            return {'success': False, 'error': 'This payment was already processed.'}
         
         if payment_mode == 'full':
             # Full Payment: mark as fully paid
@@ -1250,14 +1285,17 @@ def process_payment(visit_id):
             discount_reason = data.get('discount_reason', '').strip()
             
             if discount_amount is None or discount_amount < 0:
+                conn.rollback()
                 conn.close()
                 return {'success': False, 'error': 'Invalid discount amount.'}
             
             if discount_amount > total_fee:
+                conn.rollback()
                 conn.close()
                 return {'success': False, 'error': 'Discount cannot exceed the total fee.'}
             
             if not discount_reason:
+                conn.rollback()
                 conn.close()
                 return {'success': False, 'error': 'Discount reason is required.'}
             
@@ -1279,14 +1317,17 @@ def process_payment(visit_id):
             loan_due_date = data.get('loan_due_date')
             
             if amount_paid is None or amount_paid < 0:
+                conn.rollback()
                 conn.close()
                 return {'success': False, 'error': 'Invalid payment amount.'}
             
             if amount_paid >= total_fee:
+                conn.rollback()
                 conn.close()
                 return {'success': False, 'error': 'Loan only applies to partial payments. Use Full Payment instead.'}
             
             if not witness_name:
+                conn.rollback()
                 conn.close()
                 return {'success': False, 'error': 'Witness name is required for loans.'}
             
@@ -1295,6 +1336,7 @@ def process_payment(visit_id):
                 try:
                     datetime.datetime.strptime(loan_due_date, '%Y-%m-%d')
                 except ValueError:
+                    conn.rollback()
                     conn.close()
                     return {'success': False, 'error': 'Invalid due date format. Use YYYY-MM-DD.'}
             else:
