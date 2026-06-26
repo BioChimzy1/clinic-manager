@@ -2,7 +2,7 @@ import sqlite3
 import datetime
 import uuid
 from flask import Flask, render_template, request, redirect, url_for, send_from_directory, session, flash
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
 
@@ -10,6 +10,21 @@ app = Flask(__name__)
 app.secret_key = 'your_secret_key_here_change_this_later'
 
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+
+# ------------------------------------------------------------------
+# HELPER FUNCTION
+# ------------------------------------------------------------------
+def get_current_clinic_id():
+    """Returns the clinic_id of the currently logged-in staff member."""
+    staff_id = session.get('staff_id')
+    if not staff_id:
+        return None
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT clinic_id FROM staff WHERE id = ? AND is_active = 1", (staff_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
 
 # ------------------------------------------------------------------
 # DATABASE INITIALIZATION (Your existing amazing schema)
@@ -253,6 +268,33 @@ def init_db():
     ''')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_audit_log_staff ON audit_log(staff_id);')
     
+    # --------------------------------------------------------------
+    # AUTO-CREATE DEFAULT ADMIN IF NO STAFF EXISTS
+    # --------------------------------------------------------------
+    cursor.execute("SELECT COUNT(*) FROM staff")
+    staff_count = cursor.fetchone()[0]
+
+    if staff_count == 0:
+        # Create a default admin account so the user never gets locked out
+        default_username = "admin"
+        default_password = "admin123"  # <--- You can change this to anything you want
+        hashed_pw = generate_password_hash(default_password)
+
+        cursor.execute('''
+            INSERT INTO staff (uuid, clinic_id, full_name, role, username, password_hash, is_active, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            str(uuid.uuid4()),
+            None,  # No clinic yet; the setup page will assign one
+            "System Administrator",
+            "Admin",
+            default_username,
+            hashed_pw,
+            1,
+            datetime.datetime.now().isoformat()
+        ))
+        print(f"✅ Default admin created! Username: '{default_username}', Password: '{default_password}'")
+    
     conn.commit()
     conn.close()
 
@@ -285,13 +327,18 @@ def login():
         
         conn = sqlite3.connect('clinic.db')
         cursor = conn.cursor()
-        cursor.execute("SELECT id, role, password_hash FROM staff WHERE username = ? AND is_active = 1", (username,))
+        cursor.execute("SELECT id, role, password_hash, clinic_id FROM staff WHERE username = ? AND is_active = 1", (username,))
         user = cursor.fetchone()
         conn.close()
         
         if user and check_password_hash(user[2], password):
             session['staff_id'] = user[0]
             session['role'] = user[1]
+            
+            # Redirect to setup if they have no clinic
+            if not user[3] or user[3] == 0:
+                return redirect(url_for('setup_clinic'))
+            
             return redirect(url_for('dashboard'))
         return render_template('login.html', error='Invalid username or password')
     return render_template('login.html')
@@ -301,11 +348,60 @@ def logout():
     session.clear()
     return redirect(url_for('login'))
 
+@app.route('/setup_clinic', methods=['GET', 'POST'])
+def setup_clinic():
+    """First-time setup: User must create their clinic before using the app."""
+    if 'staff_id' not in session:
+        return redirect(url_for('login'))
+    
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT clinic_id FROM staff WHERE id = ?", (session['staff_id'],))
+    existing = cursor.fetchone()
+    if existing and existing[0]:
+        flash('You already have a clinic assigned. Welcome back!', 'info')
+        return redirect(url_for('dashboard'))
+    
+    if request.method == 'POST':
+        clinic_name = request.form['clinic_name'].strip()
+        phone = request.form['phone'].strip()
+        email = request.form['email'].strip()
+        address = request.form['address'].strip()
+        
+        if not clinic_name:
+            flash('Clinic Name is required.', 'danger')
+            conn.close()
+            return render_template('setup_clinic.html')
+        
+        cursor.execute('''
+            INSERT INTO clinics (uuid, clinic_name, phone, email, address, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (str(uuid.uuid4()), clinic_name, phone, email, address, datetime.datetime.now().isoformat()))
+        
+        clinic_id = cursor.lastrowid
+        
+        cursor.execute('''
+            UPDATE staff SET clinic_id = ?, updated_at = ? WHERE id = ?
+        ''', (clinic_id, datetime.datetime.now().isoformat(), session['staff_id']))
+        
+        conn.commit()
+        conn.close()
+        
+        flash(f'Clinic "{clinic_name}" created successfully! You are now the Admin.', 'success')
+        return redirect(url_for('dashboard'))
+    
+    conn.close()
+    return render_template('setup_clinic.html')
+
 # ------------------------------------------------------------------
 # PATIENT REGISTRATION (Walk-In OR Appointment)
 # ------------------------------------------------------------------
 @app.route('/register', methods=['GET', 'POST'])
 def register():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
     if request.method == 'POST':
         name = request.form['name']
         date_of_birth = request.form['date_of_birth']
@@ -356,6 +452,9 @@ def register():
 # ------------------------------------------------------------------
 @app.route('/queue')
 def queue():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
     
@@ -377,6 +476,9 @@ def queue():
 # ------------------------------------------------------------------
 @app.route('/appointments')
 def appointments():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
     """View all scheduled appointments"""
     allowed_roles = ['admin', 'cashier', 'doctor', 'receptionist']
     user_role = session.get('role', '').lower()
@@ -415,6 +517,9 @@ def appointments():
 
 @app.route('/appointments/schedule', methods=['GET', 'POST'])
 def schedule_appointment():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
     """Schedule a new appointment for an existing or new patient"""
     allowed_roles = ['admin', 'cashier', 'doctor', 'receptionist']
     user_role = session.get('role', '').lower()
@@ -466,6 +571,9 @@ def schedule_appointment():
 
 @app.route('/appointments/update/<int:appt_id>', methods=['POST'])
 def update_appointment(appt_id):
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
     """Update appointment status (Confirm, Cancel, Reschedule, Missed, Check In)"""
     allowed_roles = ['admin', 'cashier', 'doctor', 'receptionist']
     user_role = session.get('role', '').lower()
@@ -525,6 +633,9 @@ def update_appointment(appt_id):
     
 @app.route('/appointments/review/<int:patient_id>', methods=['GET', 'POST'])
 def review_appointment(patient_id):
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
     """Doctor reviews a pending appointment before confirming it"""
     allowed_roles = ['admin', 'cashier', 'doctor']
     user_role = session.get('role', '').lower()
@@ -609,6 +720,9 @@ def review_appointment(patient_id):
 # ------------------------------------------------------------------
 @app.route('/inventory', methods=['GET', 'POST'])
 def inventory():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
     
@@ -771,6 +885,9 @@ def inventory():
 
 @app.route('/inventory/reduce/<int:item_id>', methods=['POST'])
 def reduce_inventory(item_id):
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
     """
     Explicit, separate action for removing units from a specific batch --
     covers both clearing out expired stock entirely and smaller partial
@@ -829,6 +946,9 @@ def reduce_inventory(item_id):
 # ------------------------------------------------------------------
 @app.route('/price_list', methods=['GET', 'POST'])
 def price_list():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
     
@@ -915,6 +1035,9 @@ def price_list():
 
 @app.route('/price_list/update/<int:item_id>', methods=['POST'])
 def update_price_item(item_id):
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
     data = request.get_json()
@@ -948,6 +1071,9 @@ def update_price_item(item_id):
 
 @app.route('/price_list/delete/<int:item_id>')
 def delete_price_item(item_id):
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
     cursor.execute("DELETE FROM price_list WHERE id = ?", (item_id,))
@@ -957,6 +1083,9 @@ def delete_price_item(item_id):
     
 @app.route('/visit/<int:patient_id>', methods=['GET', 'POST'])
 def visit(patient_id):
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
 
@@ -1185,6 +1314,9 @@ def visit(patient_id):
 # ------------------------------------------------------------------
 @app.route('/cashier')
 def cashier():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
     """Show all visits with status 'Ready for Cashier' or 'Loan Active'"""
     # Role check: Admin, Cashier, or Doctor (case-insensitive)
     allowed_roles = ['admin', 'cashier', 'doctor']
@@ -1226,6 +1358,9 @@ def cashier():
 
 @app.route('/cashier/process/<int:visit_id>', methods=['POST'])
 def process_payment(visit_id):
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
     """Process payment for a visit (Full Payment, Discount, or Loan)"""
     # Role check
     allowed_roles = ['admin', 'cashier', 'doctor']
@@ -1448,6 +1583,9 @@ def process_payment(visit_id):
 
 @app.route('/cashier/loan/<int:visit_id>', methods=['GET'])
 def loan_details(visit_id):
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
     """View loan payment history for a specific visit"""
     # Role check
     allowed_roles = ['admin', 'cashier', 'doctor']
@@ -1496,6 +1634,9 @@ def loan_details(visit_id):
 
 @app.route('/cashier/loan/pay/<int:visit_id>', methods=['POST'])
 def add_loan_payment(visit_id):
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
     """Add a new payment toward an outstanding loan"""
     # Role check
     allowed_roles = ['admin', 'cashier', 'doctor']
@@ -1582,6 +1723,9 @@ def add_loan_payment(visit_id):
 # ------------------------------------------------------------------
 @app.route('/finance')
 def finance():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
     """Finance dashboard with revenue, loans, discounts, and expenses"""
     # Role check: only Admin, Cashier, Doctor can view finance (case-insensitive)
     allowed_roles = ['admin', 'cashier', 'doctor']
@@ -1692,6 +1836,9 @@ def finance():
 
 @app.route('/finance/add_expense', methods=['POST'])
 def add_expense():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
     """Add a new expense entry"""
     allowed_roles = ['admin', 'cashier', 'doctor']
     user_role = session.get('role', '').lower()
@@ -1731,6 +1878,9 @@ def add_expense():
 
 @app.route('/finance/delete_expense/<int:expense_id>', methods=['POST'])
 def delete_expense(expense_id):
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
     """Delete an expense entry"""
     allowed_roles = ['admin', 'cashier', 'doctor']
     user_role = session.get('role', '').lower()
@@ -1746,16 +1896,188 @@ def delete_expense(expense_id):
     
     flash('Expense deleted.', 'success')
     return redirect(url_for('finance'))
+    
+# ------------------------------------------------------------------
+# STAFF MANAGEMENT ROUTES
+# ------------------------------------------------------------------
+@app.route('/staff/add', methods=['POST'])
+def add_staff():
+    """Add a new staff member to the current clinic"""
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return {'success': False, 'error': 'No clinic selected.'}
+    
+    allowed_roles = ['admin', 'doctor']
+    user_role = session.get('role', '').lower()
+    if user_role not in allowed_roles:
+        return {'success': False, 'error': 'Permission denied.'}
+    
+    full_name = request.form.get('full_name', '').strip()
+    role = request.form.get('role', '').strip()
+    username = request.form.get('username', '').strip()
+    password = request.form.get('password', '').strip()
+    
+    if not full_name or not role or not username or not password:
+        return {'success': False, 'error': 'All fields are required.'}
+    
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    
+    try:
+        hashed_pw = generate_password_hash(password)
+        cursor.execute('''
+            INSERT INTO staff (uuid, clinic_id, full_name, role, username, password_hash, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (str(uuid.uuid4()), clinic_id, full_name, role, username, hashed_pw, datetime.datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
+        return {'success': True}
+    except sqlite3.IntegrityError:
+        conn.close()
+        return {'success': False, 'error': 'Username already exists.'}
+    except Exception as e:
+        conn.close()
+        return {'success': False, 'error': str(e)}
+
+
+@app.route('/staff/edit', methods=['POST'])
+def edit_staff():
+    """Edit an existing staff member"""
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return {'success': False, 'error': 'No clinic selected.'}
+    
+    allowed_roles = ['admin', 'doctor']
+    user_role = session.get('role', '').lower()
+    if user_role not in allowed_roles:
+        return {'success': False, 'error': 'Permission denied.'}
+    
+    staff_id = request.form.get('staff_id')
+    full_name = request.form.get('full_name', '').strip()
+    role = request.form.get('role', '').strip()
+    username = request.form.get('username', '').strip()
+    password = request.form.get('password', '').strip()
+    
+    if not staff_id or not full_name or not role or not username:
+        return {'success': False, 'error': 'Name, role, and username are required.'}
+    
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    
+    try:
+        if password:
+            # Update with new password
+            hashed_pw = generate_password_hash(password)
+            cursor.execute('''
+                UPDATE staff SET full_name = ?, role = ?, username = ?, password_hash = ?, updated_at = ?
+                WHERE id = ? AND clinic_id = ?
+            ''', (full_name, role, username, hashed_pw, datetime.datetime.now().isoformat(), staff_id, clinic_id))
+        else:
+            # Update without changing password
+            cursor.execute('''
+                UPDATE staff SET full_name = ?, role = ?, username = ?, updated_at = ?
+                WHERE id = ? AND clinic_id = ?
+            ''', (full_name, role, username, datetime.datetime.now().isoformat(), staff_id, clinic_id))
+        
+        conn.commit()
+        conn.close()
+        return {'success': True}
+    except sqlite3.IntegrityError:
+        conn.close()
+        return {'success': False, 'error': 'Username already exists.'}
+    except Exception as e:
+        conn.close()
+        return {'success': False, 'error': str(e)}
+
+
+@app.route('/staff/deactivate/<int:staff_id>', methods=['POST'])
+def deactivate_staff(staff_id):
+    """Soft-deactivate a staff member"""
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return {'success': False, 'error': 'No clinic selected.'}
+    
+    allowed_roles = ['admin', 'doctor']
+    user_role = session.get('role', '').lower()
+    if user_role not in allowed_roles:
+        return {'success': False, 'error': 'Permission denied.'}
+    
+    # Prevent self-deactivation
+    if staff_id == session.get('staff_id'):
+        return {'success': False, 'error': 'You cannot deactivate your own account.'}
+    
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE staff SET is_active = 0, updated_at = ?
+        WHERE id = ? AND clinic_id = ?
+    ''', (datetime.datetime.now().isoformat(), staff_id, clinic_id))
+    conn.commit()
+    conn.close()
+    return {'success': True}
+
+
+@app.route('/staff/reactivate/<int:staff_id>', methods=['POST'])
+def reactivate_staff(staff_id):
+    """Reactivate a deactivated staff member"""
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return {'success': False, 'error': 'No clinic selected.'}
+    
+    allowed_roles = ['admin', 'doctor']
+    user_role = session.get('role', '').lower()
+    if user_role not in allowed_roles:
+        return {'success': False, 'error': 'Permission denied.'}
+    
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE staff SET is_active = 1, updated_at = ?
+        WHERE id = ? AND clinic_id = ?
+    ''', (datetime.datetime.now().isoformat(), staff_id, clinic_id))
+    conn.commit()
+    conn.close()
+    return {'success': True}    
+    
+    
 
 # ------------------------------------------------------------------
-# STAFF MANAGEMENT (Coming Soon)
+# STAFF MANAGEMENT
 # ------------------------------------------------------------------
-@app.route('/staff')
+@app.route('/staff', methods=['GET'])
 def staff():
-    return render_template('staff.html', role=session.get('role'))
-
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
+    
+    # Only Admin and Doctor can manage staff
+    allowed_roles = ['admin', 'doctor']
+    user_role = session.get('role', '').lower()
+    if user_role not in allowed_roles:
+        flash('You do not have permission to manage staff.', 'danger')
+        return redirect(url_for('dashboard'))
+    
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    
+    # Fetch all active staff for this clinic
+    cursor.execute('''
+        SELECT id, full_name, role, username, is_active
+        FROM staff
+        WHERE clinic_id = ?
+        ORDER BY role, full_name
+    ''', (clinic_id,))
+    staff_list = cursor.fetchall()
+    conn.close()
+    
+    return render_template('staff.html', staff_list=staff_list, role=session.get('role'))
+    
+    
 @app.route('/dashboard')
 def dashboard():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
 
@@ -1772,26 +2094,27 @@ def dashboard():
     seen_today_count = 0
 
     # --- Inventory stats ---
-    cursor.execute("SELECT COUNT(*) FROM inventory WHERE is_active = 1")
+    # FIXED: Added (clinic_id,) to these queries
+    cursor.execute("SELECT COUNT(*) FROM inventory WHERE clinic_id = ? AND is_active = 1", (clinic_id,))
     total_items_count = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM inventory WHERE is_active = 1 AND quantity <= min_alert_level")
+    cursor.execute("SELECT COUNT(*) FROM inventory WHERE clinic_id = ? AND is_active = 1 AND quantity <= min_alert_level", (clinic_id,))
     low_stock_count = cursor.fetchone()[0]
 
     today = datetime.date.today()
     cutoff = (today + datetime.timedelta(days=14)).isoformat()
     cursor.execute(
-        "SELECT COUNT(*) FROM inventory WHERE is_active = 1 AND expiry_date IS NOT NULL AND expiry_date <= ? AND expiry_date >= ?",
-        (cutoff, today.isoformat())
+        "SELECT COUNT(*) FROM inventory WHERE clinic_id = ? AND is_active = 1 AND expiry_date IS NOT NULL AND expiry_date <= ? AND expiry_date >= ?",
+        (clinic_id, cutoff, today.isoformat())
     )
     expiring_soon_count = cursor.fetchone()[0]
 
     # --- Price List stats ---
-    cursor.execute("SELECT COUNT(*) FROM price_list WHERE is_active = 1")
+    cursor.execute("SELECT COUNT(*) FROM price_list WHERE clinic_id = ? AND is_active = 1", (clinic_id,))
     priced_items_count = cursor.fetchone()[0]
 
     # --- Cashier stats ---
-    cursor.execute("SELECT COUNT(*) FROM visits WHERE status IN ('Ready for Cashier', 'Loan Active')")
+    cursor.execute("SELECT COUNT(*) FROM visits WHERE clinic_id = ? AND status IN ('Ready for Cashier', 'Loan Active')", (clinic_id,))
     cashier_count = cursor.fetchone()[0]
 
     # --- NEW: Total Cash Collected TODAY ---
@@ -1803,9 +2126,11 @@ def dashboard():
         AND updated_at >= ? AND updated_at <= ?
     ''', (today_start, today_end))
     today_cash_collected = cursor.fetchone()[0] or 0
-        # --- Appointments stats ---
+    
+    # --- Appointments stats ---
     cursor.execute("SELECT COUNT(*) FROM appointments WHERE status IN ('Pending', 'Scheduled')")
     appointments_count = cursor.fetchone()[0]
+    
     conn.close()
     
     return render_template(
@@ -1821,7 +2146,7 @@ def dashboard():
         priced_items_count=priced_items_count,
         cashier_count=cashier_count,
         today_cash_collected=today_cash_collected,
-        appointments_count=appointments_count  # <--- ADD THIS
+        appointments_count=appointments_count
     )
     
     
