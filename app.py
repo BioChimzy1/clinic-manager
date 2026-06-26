@@ -1830,6 +1830,159 @@ def add_loan_payment(visit_id):
         return {'success': False, 'error': str(e)}
 
 # ------------------------------------------------------------------
+# RETAIL / PHARMACY SALES (Non-clinical)
+# ------------------------------------------------------------------
+@app.route('/retail', methods=['GET', 'POST'])
+def retail():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
+    
+    allowed_roles = ['admin', 'cashier', 'doctor']
+    user_role = session.get('role', '').lower()
+    if user_role not in allowed_roles:
+        flash('You do not have permission to access Retail Sales.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    if request.method == 'POST':
+        # Get the hidden cart data
+        cart_data_json = request.form.get('cart_data')
+        amount_paid = int(float(request.form.get('amount_paid', 0)) * 100) # To Tambala
+
+        if not cart_data_json:
+            flash('No items in cart.', 'danger')
+            return redirect(url_for('retail'))
+        
+        import json
+        cart = json.loads(cart_data_json)
+
+        conn = sqlite3.connect('clinic.db')
+        cursor = conn.cursor()
+
+        try:
+            total_fee = 0
+            visit_items = []
+
+            # 1. Verify all items and calculate totals
+            today_str = datetime.date.today().isoformat()
+            for item in cart:
+                cursor.execute('''
+                    SELECT price_list.id, price_list.item_name, price_list.item_type, price_list.price, 
+                           price_list.quantity AS pack_quantity, price_list.inventory_id,
+                           COALESCE(stock.usable_qty, 0) AS usable_qty
+                    FROM price_list
+                    LEFT JOIN inventory AS linked_item ON price_list.inventory_id = linked_item.id
+                    LEFT JOIN (
+                        SELECT LOWER(TRIM(item_name)) AS name_key, category,
+                               SUM(CASE WHEN expiry_date >= ? THEN quantity ELSE 0 END) AS usable_qty
+                        FROM inventory WHERE is_active = 1 GROUP BY name_key, category
+                    ) AS stock ON stock.name_key = LOWER(TRIM(linked_item.item_name)) 
+                             AND stock.category = linked_item.category
+                    WHERE price_list.id = ? AND price_list.is_active = 1
+                ''', (today_str, item['price_list_id']))
+                
+                row = cursor.fetchone()
+                if not row:
+                    conn.close()
+                    flash(f'Item not found: {item["name"]}', 'danger')
+                    return redirect(url_for('retail'))
+
+                pl_id, pl_name, pl_type, pl_price, pl_pack_qty, pl_inv_id, usable_qty = row
+                qty_sold = item['qty']
+
+                if pl_inv_id is not None and qty_sold > usable_qty:
+                    conn.close()
+                    flash(f'Only {usable_qty} units of "{pl_name}" available.', 'danger')
+                    return redirect(url_for('retail'))
+
+                pack_qty = pl_pack_qty if pl_pack_qty and pl_pack_qty > 0 else 1
+                price_per_unit = pl_price / pack_qty
+                line_total = round(price_per_unit * qty_sold)
+                total_fee += line_total
+
+                visit_items.append({
+                    'pl_id': pl_id,
+                    'pl_name': pl_name,
+                    'pl_type': pl_type,
+                    'pl_inv_id': pl_inv_id,
+                    'qty_sold': qty_sold,
+                    'price_per_unit': price_per_unit,
+                    'line_total': line_total
+                })
+
+            # 2. Create the Retail Visit
+            now = datetime.datetime.now().isoformat()
+            # updated_at is set to the same value as created_at here,
+            # not left NULL. finance() and dashboard() both compute cash
+            # totals by filtering on updated_at (since that's when a
+            # normal clinic visit actually gets PAID, separately from
+            # when it was first created) -- a retail sale is created
+            # already-paid in one step, so created_at and updated_at
+            # are genuinely the same moment for it. Leaving updated_at
+            # NULL made every retail sale invisible to those SUM()
+            # queries (NULL >= date comparisons are never true in SQL),
+            # even though it still showed up fine in the raw recent-
+            # transactions list, which orders by created_at instead.
+            cursor.execute('''
+                INSERT INTO visits (uuid, clinic_id, patient_id, doctor_id, appointment_id, visit_date, 
+                                    diagnosis, total_fee, amount_paid, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (str(uuid.uuid4()), clinic_id, None, None, None, now, 'Retail Sale', total_fee, amount_paid, 'Paid', now, now))
+            
+            visit_id = cursor.lastrowid
+
+            # 3. Insert visit_items and Deduct Inventory
+            for item in visit_items:
+                cursor.execute('''
+                    INSERT INTO visit_items (uuid, visit_id, inventory_id, price_list_id, item_type, item_name,
+                                             quantity, price_per_unit, total_line_price, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (str(uuid.uuid4()), visit_id, item['pl_inv_id'], item['pl_id'], item['pl_type'], item['pl_name'], 
+                      item['qty_sold'], round(item['price_per_unit']), item['line_total'], now))
+
+                if item['pl_inv_id'] is not None:
+                    cursor.execute('''
+                        SELECT id, quantity FROM inventory
+                        WHERE LOWER(TRIM(item_name)) = LOWER(TRIM(?)) AND is_active = 1
+                        ORDER BY expiry_date ASC
+                    ''', (item['pl_name'],))
+                    batches = cursor.fetchall()
+                    
+                    remaining = item['qty_sold']
+                    for batch_id, batch_qty in batches:
+                        if remaining <= 0: break
+                        if batch_qty > 0:
+                            deduct = min(remaining, batch_qty)
+                            cursor.execute("UPDATE inventory SET quantity = quantity - ?, updated_at = ? WHERE id = ?", (deduct, now, batch_id))
+                            remaining -= deduct
+
+            conn.commit()
+            conn.close()
+            
+            flash(f'Retail sale completed! Total MK {total_fee/100:.2f}', 'success')
+            return redirect(url_for('retail'))
+
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            flash(f'Error processing sale: {str(e)}', 'danger')
+            return redirect(url_for('retail'))
+
+    # GET: Show the retail form
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, item_name, item_type, price, quantity
+        FROM price_list
+        WHERE is_active = 1
+        ORDER BY item_name
+    ''')
+    items = cursor.fetchall()
+    conn.close()
+
+    return render_template('retail.html', items=items, role=session.get('role'))
+
+# ------------------------------------------------------------------
 # FINANCE & REPORTING DASHBOARD
 # ------------------------------------------------------------------
 @app.route('/finance')
@@ -1853,17 +2006,17 @@ def finance():
     today = datetime.date.today()
     
     if period == 'today':
-        start_date = today.isoformat()
-        end_date = today.isoformat()
+        start_date = today.isoformat() + 'T00:00:00'
+        end_date = today.isoformat() + 'T23:59:59'
     elif period == 'week':
-        start_date = (today - datetime.timedelta(days=7)).isoformat()
-        end_date = today.isoformat()
+        start_date = (today - datetime.timedelta(days=7)).isoformat() + 'T00:00:00'
+        end_date = today.isoformat() + 'T23:59:59'
     elif period == 'month':
-        start_date = (today - datetime.timedelta(days=30)).isoformat()
-        end_date = today.isoformat()
+        start_date = (today - datetime.timedelta(days=30)).isoformat() + 'T00:00:00'
+        end_date = today.isoformat() + 'T23:59:59'
     else:
-        start_date = (today - datetime.timedelta(days=7)).isoformat()
-        end_date = today.isoformat()
+        start_date = (today - datetime.timedelta(days=7)).isoformat() + 'T00:00:00'
+        end_date = today.isoformat() + 'T23:59:59'
         period = 'week'  # fallback
     
     # 1. Total Cash Collected (visits marked Paid, amount_paid within period)
@@ -1871,7 +2024,7 @@ def finance():
         SELECT SUM(amount_paid) FROM visits 
         WHERE status = 'Paid' 
         AND updated_at >= ? AND updated_at <= ?
-    ''', (start_date, end_date + 'T23:59:59'))
+    ''', (start_date, end_date))
     total_cash = cursor.fetchone()[0] or 0
     
     # 2. Outstanding Loans (active loans, total remaining balance)
@@ -1886,7 +2039,7 @@ def finance():
         SELECT SUM(discount_amount) FROM visits 
         WHERE discount_amount > 0 
         AND updated_at >= ? AND updated_at <= ?
-    ''', (start_date, end_date + 'T23:59:59'))
+    ''', (start_date, end_date))
     total_discounts = cursor.fetchone()[0] or 0
     
     # 4. Net Revenue (Cash - Discounts)
@@ -1896,7 +2049,7 @@ def finance():
     cursor.execute('''
         SELECT SUM(amount) FROM expenses 
         WHERE expense_date >= ? AND expense_date <= ?
-    ''', (start_date, end_date))
+    ''', (start_date[:10], end_date[:10])) # Dates in expenses are just YYYY-MM-DD
     total_expenses = cursor.fetchone()[0] or 0
     
     # 6. Net Profit (Net Revenue - Expenses)
@@ -1912,7 +2065,7 @@ def finance():
             visits.discount_amount,
             visits.status
         FROM visits
-        JOIN patients ON visits.patient_id = patients.id
+        LEFT JOIN patients ON visits.patient_id = patients.id
         WHERE visits.status = 'Paid' OR visits.status = 'Loan Active'
         ORDER BY visits.updated_at DESC
         LIMIT 10
@@ -2205,7 +2358,6 @@ def dashboard():
     seen_today_count = 0
 
     # --- Inventory stats ---
-    # FIXED: Added (clinic_id,) to these queries
     cursor.execute("SELECT COUNT(*) FROM inventory WHERE clinic_id = ? AND is_active = 1", (clinic_id,))
     total_items_count = cursor.fetchone()[0]
 
@@ -2229,7 +2381,7 @@ def dashboard():
     cashier_count = cursor.fetchone()[0]
 
     # --- NEW: Total Cash Collected TODAY ---
-    today_start = today.isoformat()
+    today_start = today.isoformat() + 'T00:00:00'
     today_end = today.isoformat() + 'T23:59:59'
     cursor.execute('''
         SELECT SUM(amount_paid) FROM visits 
@@ -2259,8 +2411,6 @@ def dashboard():
         today_cash_collected=today_cash_collected,
         appointments_count=appointments_count
     )
-    
-    
 
 # ------------------------------------------------------------------
 # RUN THE APP

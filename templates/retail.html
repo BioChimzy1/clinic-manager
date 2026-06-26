@@ -1,0 +1,183 @@
+{% extends 'layout.html' %}
+{% block content %}
+<div class="row mx-auto" style="max-width: 700px;">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
+            <h3 class="mb-0">🏪 Pharmacy Retail Sale</h3>
+        </div>
+
+        <div class="card shadow-sm mb-4">
+            <div class="card-header bg-success text-white">
+                <h5 class="mb-0">🛒 Add Items</h5>
+            </div>
+            <div class="card-body">
+                <!-- Item Search and Add Form -->
+                <form id="addItemForm" class="row g-2">
+                    <div class="col-md-8">
+                        <select name="price_list_id" id="itemSelect" class="form-select" required>
+                            <option value="">-- Select an item --</option>
+                            {% for item in items %}
+                            <option value="{{ item[0] }}" data-price="{{ item[3] }}" data-pack="{{ item[4] }}" data-name="{{ item[1] }}" data-type="{{ item[2] }}">
+    {{ item[1] }} ({{ item[2] }}) - MK {{ "%.2f"|format(item[3] / 100) }} - {{ item[4] }} units
+</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <input type="number" id="qtyInput" class="form-control" value="1" min="1">
+                    </div>
+                    <div class="col-md-2">
+                        <button type="button" class="btn btn-primary w-100" id="addToCartBtn">➕ Add</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Shopping Cart Table -->
+        <div class="card shadow-sm">
+            <div class="card-header bg-dark text-white">
+                <h5 class="mb-0">🧾 Current Sale</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-sm table-striped">
+                        <thead>
+                            <tr>
+                                <th>Item</th>
+                                <th class="text-end">Unit Price</th>
+                                <th class="text-end">Qty</th>
+                                <th class="text-end">Total</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="cartBody">
+                            <tr id="emptyCartRow">
+                                <td colspan="5" class="text-center text-muted py-3">No items added yet. Select an item above and click Add.</td>
+                            </tr>
+                        </tbody>
+                        <tfoot>
+                            <tr>
+                                <th colspan="3" class="text-end">Grand Total</th>
+                                <th class="text-end" id="grandTotal">MK 0.00</th>
+                                <th></th>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+
+                <form action="/retail" method="POST" id="checkoutForm" class="mt-3">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Amount Paid (MK)</label>
+                        <input type="number" step="0.01" name="amount_paid" id="amountPaidInput" class="form-control" placeholder="e.g. 500.00" required>
+                    </div>
+                    <input type="hidden" name="cart_data" id="cartDataInput">
+                    <button type="submit" class="btn btn-success w-100">✅ Complete Sale</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Track items in the shopping cart
+    const cart = [];
+
+    // Helper: Format money
+    function formatMK(tambala) {
+        return 'MK ' + (tambala / 100).toFixed(2);
+    }
+
+    // Render the cart table
+    function renderCart() {
+        const tbody = document.getElementById('cartBody');
+        const emptyRow = document.getElementById('emptyCartRow');
+        const grandTotalEl = document.getElementById('grandTotal');
+
+        tbody.innerHTML = '';
+
+        if (cart.length === 0) {
+            tbody.appendChild(emptyRow);
+            grandTotalEl.textContent = 'MK 0.00';
+            return;
+        }
+
+        let grandTotal = 0;
+
+        cart.forEach((item, index) => {
+            // Convert pack price to per-unit price
+            const packQty = item.packQty > 0 ? item.packQty : 1;
+            const unitPrice = item.price / packQty;
+            const lineTotal = Math.round(unitPrice * item.qty);
+            grandTotal += lineTotal;
+
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><strong>${item.name}</strong> <small class="text-muted">(${item.type})</small></td>
+                <td class="text-end">${formatMK(unitPrice)}</td>
+                <td class="text-end">${item.qty}</td>
+                <td class="text-end">${formatMK(lineTotal)}</td>
+                <td class="text-end">
+                    <button class="btn btn-outline-danger btn-sm remove-item-btn" data-index="${index}">✕</button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+
+        grandTotalEl.textContent = formatMK(grandTotal);
+    }
+
+    // Add item to cart
+    document.getElementById('addToCartBtn').addEventListener('click', function() {
+        const select = document.getElementById('itemSelect');
+        const qtyInput = document.getElementById('qtyInput');
+        const selectedOption = select.options[select.selectedIndex];
+
+        if (select.value === '') {
+            alert('Please select an item.');
+            return;
+        }
+
+        const qty = parseInt(qtyInput.value);
+        if (isNaN(qty) || qty < 1) {
+            alert('Please enter a valid quantity.');
+            return;
+        }
+
+        cart.push({
+            price_list_id: parseInt(select.value),
+            name: selectedOption.dataset.name,
+            type: selectedOption.dataset.type,
+            price: parseInt(selectedOption.dataset.price),
+            packQty: parseInt(selectedOption.dataset.pack),
+            qty: qty
+        });
+
+        renderCart();
+        select.value = '';
+        qtyInput.value = '1';
+    });
+
+    // Remove item from cart
+    document.getElementById('cartBody').addEventListener('click', function(e) {
+        if (e.target.classList.contains('remove-item-btn')) {
+            const index = parseInt(e.target.dataset.index);
+            cart.splice(index, 1);
+            renderCart();
+        }
+    });
+
+    // Submit the cart
+    document.getElementById('checkoutForm').addEventListener('submit', function(e) {
+        if (cart.length === 0) {
+            e.preventDefault();
+            alert('Cannot complete an empty sale. Please add at least one item.');
+            return;
+        }
+
+        // Pack the cart data into a hidden input
+        document.getElementById('cartDataInput').value = JSON.stringify(cart);
+    });
+});
+</script>
+{% endblock %}

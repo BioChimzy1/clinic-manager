@@ -104,8 +104,16 @@
                                 <tbody>
                                     {% for txn in recent_transactions %}
                                     <tr>
-                                        <td><strong>{{ txn[0] }}</strong></td>
-                                        <td><small>{{ txn[1][:10] }}</small></td>
+                                        <td>
+    <strong>
+        {% if txn[0] %}
+            {{ txn[0] }}
+        {% else %}
+            🏪 Retail Sale
+        {% endif %}
+    </strong>
+</td>
+                                        <td><small>{{ txn[1][:10] if txn[1] else 'Just now' }}</small></td>
                                         <td class="text-end">MK {{ "%.2f"|format(txn[2] / 100) }}</td>
                                         <td class="text-end">MK {{ "%.2f"|format(txn[3] / 100) }}</td>
                                         <td class="text-end">MK {{ "%.2f"|format(txn[4] / 100) }}</td>
