@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClinicManager — Built for the clinic floor</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+    :root {
+        --teal: #0F4C46;
+        --teal-deep: #0A3530;
+        --cream: #FAF7F2;
+        --cream-dim: #F0EBE1;
+        --terracotta: #E8743B;
+        --terracotta-deep: #C85A24;
+        --charcoal: #2B2B28;
+        --charcoal-soft: #5A5650;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+        margin: 0;
+        background: var(--cream);
+        color: var(--charcoal);
+        font-family: 'Inter', system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+    }
+
+    .serif { font-family: 'Fraunces', Georgia, serif; }
+
+    a { text-decoration: none; }
+
+    /* ---------- NAV ---------- */
+    .nav-wrap {
+        padding: 1.25rem 0;
+        background: var(--cream);
+    }
+    .brand-mark {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        font-family: 'Fraunces', Georgia, serif;
+        font-weight: 600;
+        font-size: 1.3rem;
+        color: var(--teal-deep);
+    }
+    .brand-mark .dot {
+        width: 10px; height: 10px;
+        border-radius: 50%;
+        background: var(--terracotta);
+        display: inline-block;
+    }
+    .nav-links a {
+        color: var(--charcoal-soft);
+        font-weight: 500;
+        font-size: 0.95rem;
+        margin-left: 1.75rem;
+        transition: color 0.15s ease;
+    }
+    .nav-links a:hover { color: var(--teal-deep); }
+    .nav-login {
+        background: var(--teal-deep);
+        color: var(--cream) !important;
+        padding: 0.5rem 1.25rem;
+        border-radius: 999px;
+        margin-left: 1.75rem !important;
+    }
+    .nav-login:hover { background: var(--teal); color: var(--cream) !important; }
+
+    /* ---------- HERO ---------- */
+    .hero {
+        padding: 4.5rem 0 3rem;
+        position: relative;
+        overflow: hidden;
+    }
+    .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.8rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--terracotta-deep);
+        margin-bottom: 1.25rem;
+    }
+    .eyebrow::before {
+        content: '';
+        width: 28px; height: 1.5px;
+        background: var(--terracotta);
+    }
+    .hero h1 {
+        font-family: 'Fraunces', Georgia, serif;
+        font-weight: 600;
+        font-size: clamp(2.4rem, 5.5vw, 4rem);
+        line-height: 1.05;
+        color: var(--teal-deep);
+        letter-spacing: -0.01em;
+        margin-bottom: 1.25rem;
+    }
+    .hero h1 em {
+        font-style: italic;
+        color: var(--terracotta-deep);
+    }
+    .hero p.lede {
+        font-size: 1.15rem;
+        color: var(--charcoal-soft);
+        max-width: 540px;
+        line-height: 1.6;
+        margin-bottom: 2rem;
+    }
+    .btn-clinic-primary {
+        background: var(--terracotta);
+        border: none;
+        color: white;
+        font-weight: 600;
+        padding: 0.85rem 1.9rem;
+        border-radius: 10px;
+        font-size: 1rem;
+        transition: background 0.15s ease, transform 0.15s ease;
+    }
+    .btn-clinic-primary:hover { background: var(--terracotta-deep); transform: translateY(-1px); color: white; }
+    .btn-clinic-secondary {
+        background: transparent;
+        border: 1.5px solid var(--teal-deep);
+        color: var(--teal-deep);
+        font-weight: 600;
+        padding: 0.85rem 1.9rem;
+        border-radius: 10px;
+        font-size: 1rem;
+        transition: all 0.15s ease;
+    }
+    .btn-clinic-secondary:hover { background: var(--teal-deep); color: var(--cream); }
+
+    /* ---------- SIGNATURE: THE FLOW STRIP ---------- */
+    .flow-strip {
+        margin-top: 3.5rem;
+        padding-top: 0;
+    }
+    .flow-strip .flow-label {
+        font-size: 0.78rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--charcoal-soft);
+        margin-bottom: 1.1rem;
+    }
+    .flow-track {
+        display: flex;
+        align-items: stretch;
+        gap: 0;
+        background: var(--teal-deep);
+        border-radius: 16px;
+        overflow: hidden;
+        box-shadow: 0 20px 40px -20px rgba(15,76,70,0.35);
+    }
+    .flow-stage {
+        flex: 1;
+        padding: 1.5rem 1.25rem;
+        position: relative;
+        border-right: 1px solid rgba(255,255,255,0.12);
+        opacity: 0;
+        transform: translateY(8px);
+        animation: stageIn 0.5s ease forwards;
+    }
+    .flow-stage:last-child { border-right: none; }
+    .flow-stage:nth-child(1) { animation-delay: 0.1s; }
+    .flow-stage:nth-child(2) { animation-delay: 0.28s; background: rgba(255,255,255,0.04); }
+    .flow-stage:nth-child(3) { animation-delay: 0.46s; }
+    .flow-stage:nth-child(4) { animation-delay: 0.64s; background: rgba(255,255,255,0.04); }
+    @keyframes stageIn {
+        to { opacity: 1; transform: translateY(0); }
+    }
+    .flow-num {
+        font-family: 'Fraunces', Georgia, serif;
+        font-size: 0.95rem;
+        color: var(--terracotta);
+        opacity: 0.85;
+        margin-bottom: 0.35rem;
+    }
+    .flow-name {
+        font-size: 1rem;
+        font-weight: 600;
+        color: var(--cream);
+        margin-bottom: 0.2rem;
+    }
+    .flow-desc {
+        font-size: 0.82rem;
+        color: rgba(250,247,242,0.65);
+        line-height: 1.4;
+    }
+    .flow-arrow {
+        position: absolute;
+        right: -1px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: rgba(255,255,255,0.3);
+        font-size: 1rem;
+        z-index: 2;
+    }
+    @media (max-width: 767px) {
+        .flow-track { flex-direction: column; }
+        .flow-stage { border-right: none; border-bottom: 1px solid rgba(255,255,255,0.12); }
+        .flow-stage:last-child { border-bottom: none; }
+        .flow-arrow { display: none; }
+    }
+
+    /* ---------- FEATURE GRID ---------- */
+    .features {
+        background: var(--cream-dim);
+        padding: 5rem 0;
+        margin-top: 4rem;
+    }
+    .features .section-tag {
+        font-size: 0.8rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--terracotta-deep);
+        margin-bottom: 0.6rem;
+    }
+    .features h2 {
+        font-family: 'Fraunces', Georgia, serif;
+        font-weight: 600;
+        font-size: clamp(1.8rem, 3.5vw, 2.5rem);
+        color: var(--teal-deep);
+        max-width: 600px;
+        margin-bottom: 3rem;
+        line-height: 1.15;
+    }
+    .feat-card {
+        background: var(--cream);
+        border-radius: 14px;
+        padding: 1.75rem;
+        height: 100%;
+        border: 1px solid rgba(15,76,70,0.08);
+    }
+    .feat-card .feat-icon {
+        font-size: 1.6rem;
+        margin-bottom: 0.9rem;
+        display: block;
+    }
+    .feat-card h5 {
+        font-weight: 700;
+        font-size: 1.05rem;
+        color: var(--teal-deep);
+        margin-bottom: 0.5rem;
+    }
+    .feat-card p {
+        font-size: 0.92rem;
+        color: var(--charcoal-soft);
+        line-height: 1.55;
+        margin: 0;
+    }
+
+    /* ---------- CTA BAND ---------- */
+    .cta-band {
+        background: var(--teal-deep);
+        border-radius: 20px;
+        padding: 3.5rem 2.5rem;
+        margin: 5rem 0;
+        text-align: center;
+    }
+    .cta-band h3 {
+        font-family: 'Fraunces', Georgia, serif;
+        font-weight: 600;
+        font-size: clamp(1.6rem, 3vw, 2.1rem);
+        color: var(--cream);
+        margin-bottom: 0.6rem;
+    }
+    .cta-band p {
+        color: rgba(250,247,242,0.7);
+        margin-bottom: 1.75rem;
+    }
+
+    /* ---------- FOOTER ---------- */
+    .site-footer {
+        padding: 2.5rem 0;
+        border-top: 1px solid rgba(15,76,70,0.1);
+    }
+    .site-footer small {
+        color: var(--charcoal-soft);
+        font-size: 0.85rem;
+    }
+    .site-footer a {
+        color: var(--charcoal-soft);
+        margin-left: 1.25rem;
+        font-size: 0.85rem;
+    }
+    .site-footer a:hover { color: var(--teal-deep); }
+
+    @media (prefers-reduced-motion: reduce) {
+        .flow-stage { animation: none; opacity: 1; transform: none; }
+    }
+</style>
+</head>
+<body>
+
+<div class="container">
+    <nav class="nav-wrap d-flex justify-content-between align-items-center">
+        <a href="/" class="brand-mark"><span class="dot"></span>ClinicManager</a>
+        <button class="navbar-toggler border-0 d-lg-none" type="button" data-bs-toggle="collapse" data-bs-target="#navLinks">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse flex-grow-0 d-none d-lg-flex" id="navLinks">
+            <div class="nav-links d-flex align-items-center">
+                <a href="/about">About</a>
+                <a href="/contact">Contact</a>
+                <a href="/login" class="nav-login">Log in</a>
+            </div>
+        </div>
+    </nav>
+    <div class="collapse d-lg-none" id="navLinks">
+        <div class="nav-links d-flex flex-column pb-3">
+            <a href="/about" class="py-2">About</a>
+            <a href="/contact" class="py-2">Contact</a>
+            <a href="/login" class="nav-login d-inline-block mt-2" style="width: fit-content;">Log in</a>
+        </div>
+    </div>
+</div>
+
+<div class="container hero">
+    <div class="row">
+        <div class="col-lg-8">
+            <div class="eyebrow">Built on the clinic floor, in Malawi</div>
+            <h1>The clinic runs<br>on paper. <em>This doesn't.</em></h1>
+            <p class="lede">
+                ClinicManager replaces the notebook, the loose receipts, and the
+                guesswork on what's left in the cupboard — one system for queue,
+                visits, stock, and cash, built for clinics that can't afford to
+                get it wrong.
+            </p>
+            <div class="d-flex gap-3 flex-wrap">
+                <a href="/login" class="btn-clinic-primary">Get started</a>
+                <a href="/about" class="btn-clinic-secondary">See what it does</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="flow-strip">
+        <div class="flow-label">A patient's visit, start to finish</div>
+        <div class="flow-track">
+            <div class="flow-stage">
+                <div class="flow-num">01</div>
+                <div class="flow-name">Queue</div>
+                <div class="flow-desc">Walk-ins and appointments, one list, no double-booking.</div>
+                <div class="flow-arrow">→</div>
+            </div>
+            <div class="flow-stage">
+                <div class="flow-num">02</div>
+                <div class="flow-name">Visit</div>
+                <div class="flow-desc">Diagnosis, drugs, and procedures recorded against real stock.</div>
+                <div class="flow-arrow">→</div>
+            </div>
+            <div class="flow-stage">
+                <div class="flow-num">03</div>
+                <div class="flow-name">Cashier</div>
+                <div class="flow-desc">Pay in full, discount, or record a loan — every kwacha tracked.</div>
+                <div class="flow-arrow">→</div>
+            </div>
+            <div class="flow-stage">
+                <div class="flow-num">04</div>
+                <div class="flow-name">Stock</div>
+                <div class="flow-desc">Inventory deducts itself. Expiry dates flag before they bite.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="features">
+    <div class="container">
+        <div class="section-tag">What's inside</div>
+        <h2>Everything a small clinic actually needs — nothing it doesn't.</h2>
+        <div class="row g-4">
+            <div class="col-md-6 col-lg-4">
+                <div class="feat-card">
+                    <span class="feat-icon">📋</span>
+                    <h5>Queue & Appointments</h5>
+                    <p>One active queue for walk-ins and scheduled visits, so reception never double-books a slot.</p>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="feat-card">
+                    <span class="feat-icon">💊</span>
+                    <h5>FEFO Inventory</h5>
+                    <p>Stock is deducted from whichever batch expires soonest first — automatically, every time.</p>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="feat-card">
+                    <span class="feat-icon">🧾</span>
+                    <h5>Cashier & Loans</h5>
+                    <p>Full payments, discounts with a reason on record, and patient loans with a witness and due date.</p>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="feat-card">
+                    <span class="feat-icon">🏪</span>
+                    <h5>Retail Sales</h5>
+                    <p>Sell over-the-counter without a patient visit, using the same stock and the same price list.</p>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="feat-card">
+                    <span class="feat-icon">📜</span>
+                    <h5>Price History</h5>
+                    <p>Every price change is logged — what it was, what it became, who changed it, and when.</p>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="feat-card">
+                    <span class="feat-icon">📊</span>
+                    <h5>Finance, Plain and Simple</h5>
+                    <p>Cash collected, loans outstanding, and net profit — today, this week, or this month.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="container">
+    <div class="cta-band">
+        <h3>Run by the people on the floor — not a vendor.</h3>
+        <p>Built for one real clinic first. Now ready for yours.</p>
+        <a href="/login" class="btn-clinic-primary">Log in to ClinicManager</a>
+    </div>
+
+    <footer class="site-footer d-flex flex-column flex-md-row justify-content-between align-items-center">
+        <small>&copy; 2026 ClinicManager — built by Boyd Chimimba.</small>
+        <div>
+            <a href="/about">About</a>
+            <a href="/contact">Contact</a>
+        </div>
+    </footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

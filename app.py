@@ -329,14 +329,18 @@ if not os.path.exists('clinic.db'):
 # This block forces every page to ask for login first
 @app.before_request
 def require_login():
-    if request.path == '/login' or request.path.startswith('/static/'):
+    if request.path == '/' or request.path == '/login' or request.path.startswith('/static/') or request.path == '/about' or request.path == '/contact':
         return
     if 'staff_id' not in session:
         return redirect(url_for('login'))
 
 @app.route('/')
 def home():
-    return redirect(url_for('login'))
+    """Display the public Welcome / Landing page."""
+    # If the user is already logged in, send them straight to the dashboard.
+    if 'staff_id' in session:
+        return redirect(url_for('dashboard'))
+    return render_template('home.html')
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -365,7 +369,7 @@ def login():
 @app.route('/logout')
 def logout():
     session.clear()
-    return redirect(url_for('login'))
+    return redirect(url_for('home'))
 
 @app.route('/setup_clinic', methods=['GET', 'POST'])
 def setup_clinic():
@@ -2412,6 +2416,19 @@ def dashboard():
         appointments_count=appointments_count
     )
 
+# ------------------------------------------------------------------
+# ABOUT & CONTACT PAGES
+# ------------------------------------------------------------------
+@app.route('/about')
+def about():
+    """Display the About page with project information."""
+    return render_template('about.html', role=session.get('role'))
+
+@app.route('/contact')
+def contact():
+    """Display the Contact Us page."""
+    return render_template('contact.html', role=session.get('role'))
+    
 # ------------------------------------------------------------------
 # RUN THE APP
 # ------------------------------------------------------------------
