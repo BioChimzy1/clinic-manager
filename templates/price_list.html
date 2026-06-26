@@ -95,8 +95,16 @@
                                    style="width: 60px;" value="{{ item[4] }}" data-id="{{ item[0] }}" min="0">
                         </td>
                         <td class="text-end">
-                            <button class="btn btn-outline-primary btn-sm py-0 px-2 save-edit-btn me-1" data-id="{{ item[0] }}" style="font-size: 0.75rem;">💾</button>
-                            <a href="/price_list/delete/{{ item[0] }}" class="btn btn-outline-danger btn-sm py-0 px-2" style="font-size: 0.75rem;" onclick="return confirm('Delete this price item?')">🗑️</a>
+                            <div class="d-flex flex-column flex-md-row gap-1 align-items-md-end align-items-start">
+                                <!-- Save Button -->
+                                <button class="btn btn-outline-primary btn-sm py-0 px-2 save-edit-btn" data-id="{{ item[0] }}" style="font-size: 0.75rem;">💾</button>
+                                
+                                <!-- History Button -->
+                                <button class="btn btn-outline-secondary btn-sm py-0 px-2 history-btn" data-id="{{ item[0] }}" data-name="{{ item[2] }}" style="font-size: 0.75rem;">📜 Hist</button>
+                                
+                                <!-- Delete Button -->
+                                <a href="/price_list/delete/{{ item[0] }}" class="btn btn-outline-danger btn-sm py-0 px-2" style="font-size: 0.75rem;" onclick="return confirm('Delete this price item?')">🗑️</a>
+                            </div>
                         </td>
                     </tr>
                     {% else %}
@@ -110,7 +118,41 @@
     </div>
 </div>
 
-<!-- JavaScript for Autocomplete & Inline Save -->
+<!-- Price History Modal -->
+<div class="modal fade" id="priceHistoryModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-secondary text-white">
+                <h5 class="modal-title">📜 Price History: <span id="phItemName"></span></h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="table-responsive">
+                    <table class="table table-sm table-bordered table-striped">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Date/Time</th>
+                                <th>Changed By</th>
+                                <th class="text-end">Old Price</th>
+                                <th class="text-end">New Price</th>
+                                <th class="text-end">Old Qty</th>
+                                <th class="text-end">New Qty</th>
+                            </tr>
+                        </thead>
+                        <tbody id="priceHistoryBody">
+                            <tr><td colspan="6" class="text-center text-muted">Loading history...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- JavaScript for Autocomplete, Inline Save & Price History -->
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     // --- Autocomplete Logic ---
@@ -205,6 +247,47 @@ document.addEventListener('DOMContentLoaded', function() {
                 } else {
                     alert('Error saving changes!');
                 }
+            });
+        });
+    });
+
+    // --- Price History Logic ---
+    const priceHistoryModal = new bootstrap.Modal(document.getElementById('priceHistoryModal'));
+
+    document.querySelectorAll('.history-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const itemId = this.dataset.id;
+            const itemName = this.dataset.name;
+            
+            document.getElementById('phItemName').textContent = itemName;
+            document.getElementById('priceHistoryBody').innerHTML = '<tr><td colspan="6" class="text-center text-muted">Loading history...</td></tr>';
+            priceHistoryModal.show();
+
+            fetch('/price_list/history/' + itemId)
+            .then(response => response.json())
+            .then(data => {
+                if (data.history.length === 0) {
+                    document.getElementById('priceHistoryBody').innerHTML = '<tr><td colspan="6" class="text-center text-muted">No price changes recorded yet.</td></tr>';
+                    return;
+                }
+                
+                let html = '';
+                data.history.forEach(record => {
+                    html += `
+                        <tr>
+                            <td><small>${record.changed_at.slice(0, 16)}</small></td>
+                            <td><small>${record.changed_by}</small></td>
+                            <td class="text-end text-danger">MK ${(record.old_price / 100).toFixed(2)}</td>
+                            <td class="text-end text-success">MK ${(record.new_price / 100).toFixed(2)}</td>
+                            <td class="text-end">${record.old_qty}</td>
+                            <td class="text-end">${record.new_qty}</td>
+                        </tr>
+                    `;
+                });
+                document.getElementById('priceHistoryBody').innerHTML = html;
+            })
+            .catch(() => {
+                document.getElementById('priceHistoryBody').innerHTML = '<tr><td colspan="6" class="text-center text-danger">Error loading history.</td></tr>';
             });
         });
     });

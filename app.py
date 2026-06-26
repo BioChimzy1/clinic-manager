@@ -252,6 +252,25 @@ def init_db():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_expenses_uuid ON expenses(uuid);')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_expenses_clinic ON expenses(clinic_id);')
     
+    # 10.5 PRICE HISTORY (NEW - ADD THIS BLOCK HERE)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS price_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            price_list_id INTEGER NOT NULL,
+            item_type TEXT NOT NULL,
+            item_name TEXT NOT NULL,
+            old_price INTEGER NOT NULL,
+            new_price INTEGER NOT NULL,
+            old_quantity INTEGER DEFAULT 0,
+            new_quantity INTEGER DEFAULT 0,
+            changed_at TEXT,
+            changed_by_staff_id INTEGER,
+            FOREIGN KEY (price_list_id) REFERENCES price_list (id),
+            FOREIGN KEY (changed_by_staff_id) REFERENCES staff (id)
+        )
+    ''')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_price_history_list ON price_history(price_list_id);')
+    
     # 11. audit_log
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS audit_log (
@@ -1037,14 +1056,14 @@ def price_list():
 def update_price_item(item_id):
     clinic_id = get_current_clinic_id()
     if not clinic_id:
-        return redirect(url_for('setup_clinic'))
+        return {'success': False, 'error': 'No clinic selected.'}
+    
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
     data = request.get_json()
     new_price = data.get('price')
     new_qty = data.get('quantity')
 
-    # Guardrail: neither price nor quantity should ever go negative here.
     try:
         if new_price is None or float(new_price) < 0:
             conn.close()
@@ -1057,15 +1076,34 @@ def update_price_item(item_id):
         return {'success': False, 'error': 'Invalid price or quantity.'}
 
     try:
+        # 1. Get the OLD data before updating
+        cursor.execute("SELECT price, quantity, item_type, item_name FROM price_list WHERE id = ?", (item_id,))
+        row = cursor.fetchone()
+        if row:
+            old_price, old_qty, item_type, item_name = row
+        else:
+            conn.close()
+            return {'success': False, 'error': 'Item not found.'}
+
+        # 2. Update the price and quantity
         cursor.execute('''
             UPDATE price_list 
             SET price = ?, quantity = ?, updated_at = ? 
             WHERE id = ?
         ''', (new_price, new_qty, datetime.datetime.now().isoformat(), item_id))
+
+        # 3. If anything actually changed, log it to price_history using your perfect table
+        if old_price != new_price or old_qty != new_qty:
+            cursor.execute('''
+                INSERT INTO price_history (price_list_id, item_type, item_name, old_price, new_price, old_quantity, new_quantity, changed_by_staff_id, changed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (item_id, item_type, item_name, old_price, new_price, old_qty, new_qty, session.get('staff_id'), datetime.datetime.now().isoformat()))
+
         conn.commit()
         conn.close()
         return {'success': True}
     except Exception as e:
+        conn.rollback()
         conn.close()
         return {'success': False, 'error': str(e)}
 
@@ -1080,6 +1118,40 @@ def delete_price_item(item_id):
     conn.commit()
     conn.close()
     return redirect(url_for('price_list'))
+    
+    
+@app.route('/price_list/history/<int:item_id>', methods=['GET'])
+def price_list_history(item_id):
+    """Fetch the price history for a specific price_list item."""
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return {'error': 'No clinic selected'}, 403
+
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT item_type, item_name, old_price, new_price, old_quantity, new_quantity, changed_at, staff.full_name
+        FROM price_history
+        LEFT JOIN staff ON price_history.changed_by_staff_id = staff.id
+        WHERE price_list_id = ?
+        ORDER BY changed_at DESC
+    ''', (item_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return {
+        'history': [{
+            'type': r[0],
+            'name': r[1],
+            'old_price': r[2],
+            'new_price': r[3],
+            'old_qty': r[4],
+            'new_qty': r[5],
+            'changed_at': r[6],
+            'changed_by': r[7] or 'System'
+        } for r in rows]
+    }    
     
 @app.route('/visit/<int:patient_id>', methods=['GET', 'POST'])
 def visit(patient_id):
@@ -1355,6 +1427,45 @@ def cashier():
     return render_template('cashier.html', 
                           cashier_list=cashier_list,
                           role=session.get('role'))
+                          
+@app.route('/cashier/view/<int:visit_id>', methods=['GET'])
+def view_cashier_invoice(visit_id):
+    """View-only route to show the items charged for a specific visit."""
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    
+    # Fetch Visit Details
+    cursor.execute('''
+        SELECT visits.total_fee, visits.amount_paid, visits.diagnosis, visits.status,
+               patients.name AS patient_name
+        FROM visits
+        JOIN patients ON visits.patient_id = patients.id
+        WHERE visits.id = ?
+    ''', (visit_id,))
+    visit = cursor.fetchone()
+    
+    if not visit:
+        conn.close()
+        return {'error': 'Visit not found'}, 404
+
+    # Fetch the items for this visit
+    cursor.execute('''
+        SELECT item_type, item_name, quantity, price_per_unit, total_line_price
+        FROM visit_items
+        WHERE visit_id = ?
+    ''', (visit_id,))
+    items = cursor.fetchall()
+    
+    conn.close()
+    
+    return {
+        'patient': visit[4],
+        'diagnosis': visit[2],
+        'total': visit[0],
+        'paid': visit[1],
+        'status': visit[3],
+        'items': [{'type': i[0], 'name': i[1], 'qty': i[2], 'unit_price': i[3], 'total': i[4]} for i in items]
+    }                          
 
 @app.route('/cashier/process/<int:visit_id>', methods=['POST'])
 def process_payment(visit_id):
