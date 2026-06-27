@@ -374,15 +374,13 @@ def logout():
 @app.route('/setup_clinic', methods=['GET', 'POST'])
 def setup_clinic():
     """First-time setup: User must create their clinic before using the app."""
-    if 'staff_id' not in session:
-        return redirect(url_for('login'))
-    
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
     
     cursor.execute("SELECT clinic_id FROM staff WHERE id = ?", (session['staff_id'],))
     existing = cursor.fetchone()
     if existing and existing[0]:
+        conn.close()
         flash('You already have a clinic assigned. Welcome back!', 'info')
         return redirect(url_for('dashboard'))
     
