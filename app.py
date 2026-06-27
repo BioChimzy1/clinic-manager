@@ -2057,7 +2057,7 @@ def finance():
     # 6. Net Profit (Net Revenue - Expenses)
     net_profit = net_revenue - total_expenses
     
-    # 7. Recent transactions (last 10 visits paid)
+    # 7. Recent transactions (last 10 visits paid within selected period)
     cursor.execute('''
         SELECT 
             patients.name,
@@ -2068,19 +2068,21 @@ def finance():
             visits.status
         FROM visits
         LEFT JOIN patients ON visits.patient_id = patients.id
-        WHERE visits.status = 'Paid' OR visits.status = 'Loan Active'
+        WHERE (visits.status = 'Paid' OR visits.status = 'Loan Active')
+        AND visits.updated_at >= ? AND visits.updated_at <= ?
         ORDER BY visits.updated_at DESC
         LIMIT 10
-    ''')
+    ''', (start_date, end_date))
     recent_transactions = cursor.fetchall()
     
-    # 8. Recent expenses (last 10)
+    # 8. Recent expenses (last 10 within selected period)
     cursor.execute('''
         SELECT id, expense_date, category, description, amount
         FROM expenses
+        WHERE expense_date >= ? AND expense_date <= ?
         ORDER BY expense_date DESC
         LIMIT 10
-    ''')
+    ''', (start_date[:10], end_date[:10]))
     recent_expenses = cursor.fetchall()
     
     conn.close()
