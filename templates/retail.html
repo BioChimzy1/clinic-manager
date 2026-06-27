@@ -18,8 +18,8 @@
                             <option value="">-- Select an item --</option>
                             {% for item in items %}
                             <option value="{{ item[0] }}" data-price="{{ item[3] }}" data-pack="{{ item[4] }}" data-name="{{ item[1] }}" data-type="{{ item[2] }}">
-    {{ item[1] }} ({{ item[2] }}) - MK {{ "%.2f"|format(item[3] / 100) }} - {{ item[4] }} units
-</option>
+                                {{ item[1] }} ({{ item[2] }}) - MK {{ "%.2f"|format(item[3] / 100) }} - {{ item[4] }} units
+                            </option>
                             {% endfor %}
                         </select>
                     </div>
@@ -65,29 +65,23 @@
                     </table>
                 </div>
 
-                <form action="/retail" method="POST" id="checkoutForm" class="mt-3">
-                    <div class="row">
-                        <div class="col-md-6 offset-md-6">
-                            <div class="mb-3">
-                                <label class="form-label fw-bold">Amount Paid (MK)</label>
-                                <input type="number" step="0.01" name="amount_paid" id="amountPaidInput" class="form-control" placeholder="e.g. 500.00" required>
-                            </div>
-                        </div>
-                    </div>
-                    <input type="hidden" name="cart_data" id="cartDataInput">
-                    <div class="d-flex justify-content-end">
-                        <button type="submit" class="btn btn-success px-4">✅ Complete Sale</button>
-                    </div>
-                </form>
+                <div class="mt-3 text-end">
+                    <!-- Proceed to Payment triggers the unified modal -->
+                    <button class="btn btn-success px-4" id="proceedToPaymentBtn" disabled>💳 Proceed to Payment</button>
+                </div>
             </div>
         </div>
     </div>
 </div>
 
+{% include 'payment_modal.html' %}
+
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     // Track items in the shopping cart
     const cart = [];
+    let retailVisitId = null;
+    let retailTotal = 0;
 
     // Helper: Format money
     function formatMK(tambala) {
@@ -99,19 +93,21 @@ document.addEventListener('DOMContentLoaded', function() {
         const tbody = document.getElementById('cartBody');
         const emptyRow = document.getElementById('emptyCartRow');
         const grandTotalEl = document.getElementById('grandTotal');
+        const proceedBtn = document.getElementById('proceedToPaymentBtn');
 
         tbody.innerHTML = '';
 
         if (cart.length === 0) {
             tbody.appendChild(emptyRow);
             grandTotalEl.textContent = 'MK 0.00';
+            proceedBtn.disabled = true;
+            retailTotal = 0;
             return;
         }
 
         let grandTotal = 0;
 
         cart.forEach((item, index) => {
-            // Convert pack price to per-unit price
             const packQty = item.packQty > 0 ? item.packQty : 1;
             const unitPrice = item.price / packQty;
             const lineTotal = Math.round(unitPrice * item.qty);
@@ -131,6 +127,8 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
         grandTotalEl.textContent = formatMK(grandTotal);
+        retailTotal = grandTotal;
+        proceedBtn.disabled = false;
     }
 
     // Add item to cart
@@ -173,16 +171,268 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Submit the cart
-    document.getElementById('checkoutForm').addEventListener('submit', function(e) {
-        if (cart.length === 0) {
-            e.preventDefault();
-            alert('Cannot complete an empty sale. Please add at least one item.');
+    // --- Unified Payment Modal Logic for Retail ---
+    const paymentModal = new bootstrap.Modal(document.getElementById('paymentModal'));
+
+    // Populate Staff Witness Dropdown
+    fetch('/api/staff/list')
+        .then(res => res.json())
+        .then(data => {
+            const select = document.getElementById('loanWitness');
+            select.innerHTML = '<option value="">-- Select a staff member --</option>';
+            data.staff.forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s.id;
+                opt.textContent = s.name;
+                select.appendChild(opt);
+            });
+        });
+
+    document.getElementById('proceedToPaymentBtn').addEventListener('click', function() {
+        // Create a temporary retail visit to get an ID
+        fetch('/retail/create_draft', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cart: cart })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                retailVisitId = data.visit_id;
+                
+                // Populate Modal
+                document.getElementById('modalPatientName').textContent = '🏪 Retail Sale';
+                document.getElementById('modalTotalFee').textContent = formatMK(retailTotal);
+                document.getElementById('fullAmountDisplay').textContent = formatMK(retailTotal);
+                
+                // Reset form
+                document.getElementById('discountAmount').value = '';
+                document.getElementById('discountReason').value = '';
+                document.getElementById('loanAmount').value = '';
+                document.getElementById('loanWitness').value = '';
+                document.getElementById('loanDueDate').value = '';
+                document.getElementById('paymentReference').value = '';
+                document.getElementById('paymentChannel').value = 'Cash';
+                document.getElementById('medicalAidCompany').value = '';
+                document.getElementById('medicalAidFields').style.display = 'none';
+                document.getElementById('refFieldWrapper').style.display = 'none';
+                document.getElementById('roundingSelect').value = '0';
+                updateRoundedTotalDisplay();
+
+                // Reset Payment Mode
+                document.getElementById('payFull').checked = true;
+                togglePaymentMode('full');
+
+                // Load Invoice Items
+                document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-muted">Loading items...</td></tr>';
+                paymentModal.show();
+
+                // Build invoice HTML from cart
+                let html = '';
+                cart.forEach(item => {
+                    const packQty = item.packQty > 0 ? item.packQty : 1;
+                    const unitPrice = item.price / packQty;
+                    const lineTotal = Math.round(unitPrice * item.qty);
+                    html += `
+                        <tr>
+                            <td><span class="badge bg-info text-dark">${item.type}</span></td>
+                            <td><strong>${item.name}</strong></td>
+                            <td class="text-end">${formatMK(unitPrice)}</td>
+                            <td class="text-end">${item.qty}</td>
+                            <td class="text-end">${formatMK(lineTotal)}</td>
+                        </tr>
+                    `;
+                });
+                document.getElementById('invoiceItemsBody').innerHTML = html;
+                document.getElementById('invTotal').textContent = formatMK(retailTotal);
+            } else {
+                alert('Error: ' + data.error);
+            }
+        })
+        .catch(err => {
+            console.error(err);
+            alert('Network error. Could not create sale.');
+        });
+    });
+
+    // Rounds retailTotal (the raw sale total, in tambala) to the nearest
+    // selected MK value. "0" means no rounding.
+    function getRoundedBaseTotal() {
+        const roundTo = parseInt(document.getElementById('roundingSelect').value, 10) || 0;
+        if (roundTo <= 0) return retailTotal;
+        const roundToTambala = roundTo * 100;
+        return Math.round(retailTotal / roundToTambala) * roundToTambala;
+    }
+
+    function updateRoundedTotalDisplay() {
+        const rounded = getRoundedBaseTotal();
+        document.getElementById('roundedTotalDisplay').value = 'MK ' + (rounded / 100).toFixed(2);
+        document.getElementById('modalTotalFee').textContent = 'MK ' + (rounded / 100).toFixed(2);
+        document.getElementById('fullAmountDisplay').textContent = 'MK ' + (getFinalTotal() / 100).toFixed(2);
+        updateLoanRemaining();
+    }
+
+    document.getElementById('roundingSelect').addEventListener('change', updateRoundedTotalDisplay);
+
+    function togglePaymentMode(mode) {
+        document.getElementById('fullPaymentInfo').style.display = mode === 'full' ? 'block' : 'none';
+        document.getElementById('partialPaymentFields').style.display = mode === 'partial' ? 'block' : 'none';
+
+        if (mode === 'partial') {
+            document.getElementById('loanAmount').addEventListener('input', updateLoanRemaining);
+            updateLoanRemaining();
+        } else {
+            document.getElementById('loanAmount').removeEventListener('input', updateLoanRemaining);
+        }
+    }
+
+    // Discount amount always live-updates the full-payment display
+    document.getElementById('discountAmount').addEventListener('input', function() {
+        document.getElementById('fullAmountDisplay').textContent = 'MK ' + (getFinalTotal() / 100).toFixed(2);
+        updateLoanRemaining();
+    });
+
+    function updateLoanRemaining() {
+        const paid = parseFloat(document.getElementById('loanAmount').value) || 0;
+        const remaining = Math.max(0, getFinalTotal() / 100 - paid);
+        document.getElementById('loanRemainingDisplay').textContent = 'MK ' + remaining.toFixed(2);
+    }
+
+    document.querySelectorAll('input[name="payMode"]').forEach(radio => {
+        radio.addEventListener('change', function() {
+            togglePaymentMode(this.value);
+        });
+    });
+
+    // Payment Channel Logic
+    document.getElementById('paymentChannel').addEventListener('change', function() {
+        const val = this.value;
+        const refLabel = document.getElementById('refLabel');
+        const refInput = document.getElementById('paymentReference');
+        const refWrapper = document.getElementById('refFieldWrapper');
+        const medAidFields = document.getElementById('medicalAidFields');
+        
+        if (val === 'Airtel Money' || val === 'TNM Mpamba') {
+            refWrapper.style.display = 'block';
+            refLabel.textContent = 'Phone Number / Agent Code';
+            refInput.placeholder = 'e.g. 0991234567';
+            medAidFields.style.display = 'none';
+        } else if (val === 'Bank Transfer') {
+            refWrapper.style.display = 'block';
+            refLabel.textContent = 'Account Number';
+            refInput.placeholder = 'e.g. 1234567890';
+            medAidFields.style.display = 'none';
+        } else if (val === 'Cheque') {
+            refWrapper.style.display = 'block';
+            refLabel.textContent = 'Cheque Number';
+            refInput.placeholder = 'e.g. 001234';
+            medAidFields.style.display = 'none';
+        } else if (val === 'Medical Aid') {
+            refWrapper.style.display = 'none';
+            refInput.value = '';
+            medAidFields.style.display = 'block';
+        } else {
+            refWrapper.style.display = 'none';
+            refInput.value = '';
+            medAidFields.style.display = 'none';
+        }
+    });
+
+    // 1. Calculate the final total: round first, then apply discount
+    function getFinalTotal() {
+        const discountAmt = parseFloat(document.getElementById('discountAmount').value) * 100 || 0;
+        return Math.max(0, getRoundedBaseTotal() - discountAmt);
+    }
+
+    // 2. CONFIRM PAYMENT HANDLER (Re-written to avoid duplicate events)
+    document.getElementById('confirmPaymentBtn').addEventListener('click', function() {
+        const isFull = document.querySelector('input[name="payMode"]:checked').value === 'full';
+        const finalTotal = getFinalTotal();
+        
+        const discountAmt = parseFloat(document.getElementById('discountAmount').value) * 100 || 0;
+        const discountReason = document.getElementById('discountReason').value.trim();
+
+        if (discountAmt > 0 && !discountReason) {
+            alert('Please enter a reason for the discount.');
             return;
         }
 
-        // Pack the cart data into a hidden input
-        document.getElementById('cartDataInput').value = JSON.stringify(cart);
+        const roundTo = parseInt(document.getElementById('roundingSelect').value, 10) || 0;
+
+        const payload = { 
+            payment_mode: isFull ? 'full' : 'loan',
+            payment_channel: document.getElementById('paymentChannel').value,
+            payment_reference: document.getElementById('paymentReference').value.trim() || null,
+            medical_aid_company: document.getElementById('medicalAidCompany').value.trim() || null,
+            discount_amount: discountAmt,
+            discount_reason: discountReason || null,
+            round_to: roundTo || null,
+            rounded_total: roundTo ? getRoundedBaseTotal() : null
+        };
+
+        if (isFull) {
+            payload.amount_paid = finalTotal;
+        } else {
+            const amountPaid = parseFloat(document.getElementById('loanAmount').value) * 100 || 0;
+            const witness = document.getElementById('loanWitness').value;
+            const dueDate = document.getElementById('loanDueDate').value;
+
+            if (!amountPaid || amountPaid <= 0) {
+                alert('Please enter a valid payment amount for the loan.');
+                return;
+            }
+            if (amountPaid >= finalTotal) {
+                alert('If paying the full amount, please select "Pay Full Amount" instead.');
+                return;
+            }
+            if (!witness) {
+                alert('Witness is required for partial payments/loans.');
+                return;
+            }
+            payload.amount_paid = amountPaid;
+            payload.witness_id = witness;
+            payload.loan_due_date = dueDate || null;
+        }
+
+        const btn = this;
+        btn.disabled = true;
+        btn.textContent = 'Processing...';
+
+        if (!retailVisitId) {
+            alert('Error: Visit ID is missing. Please add items and try again.');
+            btn.disabled = false;
+            btn.textContent = '✅ Confirm & Complete';
+            return;
+        }
+
+        fetch('/cashier/process/' + retailVisitId, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                document.getElementById('paymentModal').querySelector('.btn-close').click();
+                location.reload();
+            } else {
+                alert('Error: ' + (data.error || 'Failed to process payment.'));
+                btn.disabled = false;
+                btn.textContent = '✅ Confirm & Complete';
+            }
+        })
+        .catch(err => {
+            console.error(err);
+            alert('Network error. Please try again.');
+            btn.disabled = false;
+            btn.textContent = '✅ Confirm & Complete';
+        });
+    });
+
+    document.getElementById('paymentModal').addEventListener('hidden.bs.modal', function() {
+        const btn = document.getElementById('confirmPaymentBtn');
+        btn.disabled = false;
+        btn.textContent = '✅ Confirm & Complete';
     });
 });
 </script>

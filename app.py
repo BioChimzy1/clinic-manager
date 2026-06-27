@@ -1,6 +1,7 @@
 import sqlite3
 import datetime
 import uuid
+import math
 from flask import Flask, render_template, request, redirect, url_for, send_from_directory, session, flash
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -118,8 +119,7 @@ def init_db():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_appointments_uuid ON appointments(uuid);')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_appointments_clinic ON appointments(clinic_id);')
     
-    # 5. visits
-        # 5. visits (Updated with discount and loan columns)
+    # 5. visits (Added columns for payment channels, medical aid, and retail flag)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS visits (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,12 +142,21 @@ def init_db():
             created_at TEXT,
             updated_at TEXT,
             is_synced INTEGER DEFAULT 0,
+            
+            -- NEW COLUMNS START HERE --
+            payment_channel TEXT DEFAULT 'Cash',
+            payment_reference TEXT,
+            medical_aid_company TEXT,
+            is_retail INTEGER DEFAULT 0,
+            -- NEW COLUMNS END HERE --
+
             FOREIGN KEY (clinic_id) REFERENCES clinics (id),
             FOREIGN KEY (patient_id) REFERENCES patients (id),
             FOREIGN KEY (doctor_id) REFERENCES staff (id),
             FOREIGN KEY (appointment_id) REFERENCES appointments (id)
         )
     ''')
+    
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_visits_uuid ON visits(uuid);')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_visits_clinic ON visits(clinic_id);')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_visits_appointment ON visits(appointment_id);')
@@ -1153,7 +1162,22 @@ def price_list_history(item_id):
             'changed_at': r[6],
             'changed_by': r[7] or 'System'
         } for r in rows]
-    }    
+    }  
+    
+    
+@app.route('/api/staff/list')
+def api_staff_list():
+    """Return a JSON list of active staff members for the witness dropdown."""
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return {'error': 'No clinic'}, 403
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, full_name FROM staff WHERE clinic_id = ? AND is_active = 1 ORDER BY full_name", (clinic_id,))
+    staff = cursor.fetchall()
+    conn.close()
+    return {'staff': [{'id': s[0], 'name': s[1]} for s in staff]}    
+    
     
 @app.route('/visit/<int:patient_id>', methods=['GET', 'POST'])
 def visit(patient_id):
@@ -1485,7 +1509,7 @@ def process_payment(visit_id):
     data = request.get_json()
     payment_mode = data.get('payment_mode')
     
-    if payment_mode not in ['full', 'discount', 'loan']:
+    if payment_mode not in ['full', 'loan']:
         return {'success': False, 'error': 'Invalid payment mode.'}
     
     conn = sqlite3.connect('clinic.db')
@@ -1494,7 +1518,7 @@ def process_payment(visit_id):
     try:
         # Get the visit details
         cursor.execute('''
-            SELECT total_fee, amount_paid, status, patient_id, appointment_id
+            SELECT total_fee, amount_paid, status, patient_id, appointment_id, loan_witness
             FROM visits WHERE id = ?
         ''', (visit_id,))
         visit_row = cursor.fetchone()
@@ -1503,7 +1527,7 @@ def process_payment(visit_id):
             conn.close()
             return {'success': False, 'error': 'Visit not found.'}
         
-        total_fee, current_paid, status, patient_id, appointment_id = visit_row
+        total_fee, current_paid, status, patient_id, appointment_id, existing_witness = visit_row
         
         if status not in ['Ready for Cashier', 'Loan Active']:
             conn.close()
@@ -1511,60 +1535,91 @@ def process_payment(visit_id):
         
         now = datetime.datetime.now().isoformat()
 
-        # Atomically "claim" this visit for payment before doing anything
-        # else (status update, loan_payments insert, inventory deduction).
-        # The SELECT above can't prevent two near-simultaneous requests
-        # (e.g. a fast double-click on "Confirm & Complete") from both
-        # reading 'Ready for Cashier'/'Loan Active' before either commits
-        # -- both would then pass the check and BOTH would deduct
-        # inventory. This UPDATE...WHERE re-checks status in the same
-        # statement that changes it, so only the request that actually
-        # sees the still-unclaimed row gets rowcount=1 and proceeds; the
-        # other gets rowcount=0 and is rejected as already-processed.
+        # Atomically "claim" this visit
         cursor.execute('''
             UPDATE visits SET status = 'Processing', updated_at = ?
             WHERE id = ? AND status IN ('Ready for Cashier', 'Loan Active')
         ''', (now, visit_id))
 
         if cursor.rowcount == 0:
-            # Someone else (or another click from the same person) already
-            # claimed this visit for payment a moment ago.
             conn.close()
             return {'success': False, 'error': 'This payment was already processed.'}
+
+        # ROUNDING: the cashier may choose to round the invoice total to
+        # the nearest MK 100-1000 to avoid decimals. If a rounded_total is
+        # supplied, validate it against the cashier's chosen rounding step
+        # and against the original total_fee (it can only round to the
+        # nearest multiple -- never an arbitrary value) and then persist it
+        # as the visit's real total_fee. This is a genuine adjustment to
+        # what's billed, not a discount, so it happens before any discount
+        # math and isn't recorded as one.
+        rounded_total = data.get('rounded_total')
+        round_to = data.get('round_to') or 0
+        if rounded_total is not None and round_to:
+            try:
+                rounded_total = int(rounded_total)
+                round_to_tambala = int(round_to) * 100
+            except (TypeError, ValueError):
+                conn.rollback()
+                conn.close()
+                return {'success': False, 'error': 'Invalid rounding value.'}
+
+            if round_to_tambala <= 0 or round_to_tambala % 10000 != 0:
+                conn.rollback()
+                conn.close()
+                return {'success': False, 'error': 'Invalid rounding step.'}
+
+            # Use floor(x + 0.5) for round-half-up, matching JavaScript's
+            # Math.round() exactly. Python's built-in round() uses
+            # banker's rounding (round-half-to-even), which disagrees
+            # with the frontend at exact halfway points (e.g. 12.5) and
+            # would cause this validation to wrongly reject a legitimate
+            # rounding choice.
+            expected_rounded = math.floor(total_fee / round_to_tambala + 0.5) * round_to_tambala
+            if rounded_total != expected_rounded:
+                conn.rollback()
+                conn.close()
+                return {'success': False, 'error': 'Rounded total does not match the selected rounding step.'}
+
+            cursor.execute('''
+                UPDATE visits SET total_fee = ?, updated_at = ?
+                WHERE id = ?
+            ''', (rounded_total, now, visit_id))
+            total_fee = rounded_total
+        
+        # 1. SAVE PAYMENT CHANNEL INFO
+        payment_channel = data.get('payment_channel', 'Cash')
+        payment_reference = data.get('payment_reference')
+        medical_aid_company = data.get('medical_aid_company')
+        
+        cursor.execute('''
+            UPDATE visits
+            SET payment_channel = ?, payment_reference = ?, medical_aid_company = ?
+            WHERE id = ?
+        ''', (payment_channel, payment_reference, medical_aid_company, visit_id))
         
         if payment_mode == 'full':
-            # Full Payment: mark as fully paid
-            cursor.execute('''
-                UPDATE visits
-                SET amount_paid = total_fee,
-                    discount_amount = 0,
-                    discount_reason = NULL,
-                    status = 'Paid',
-                    updated_at = ?
-                WHERE id = ?
-            ''', (now, visit_id))
-            
-        elif payment_mode == 'discount':
-            # Discount: total_fee remains as original, discount_amount tracks reduction
-            discount_amount = data.get('discount_amount')
-            discount_reason = data.get('discount_reason', '').strip()
-            
-            if discount_amount is None or discount_amount < 0:
+            # Full Payment, optionally with a discount applied on top.
+            discount_amount = data.get('discount_amount') or 0
+            discount_reason = (data.get('discount_reason') or '').strip()
+
+            if discount_amount < 0:
                 conn.rollback()
                 conn.close()
                 return {'success': False, 'error': 'Invalid discount amount.'}
-            
+
             if discount_amount > total_fee:
                 conn.rollback()
                 conn.close()
                 return {'success': False, 'error': 'Discount cannot exceed the total fee.'}
-            
-            if not discount_reason:
+
+            if discount_amount > 0 and not discount_reason:
                 conn.rollback()
                 conn.close()
                 return {'success': False, 'error': 'Discount reason is required.'}
-            
-            discounted_total = total_fee - discount_amount
+
+            amount_due = total_fee - discount_amount
+
             cursor.execute('''
                 UPDATE visits
                 SET amount_paid = ?,
@@ -1573,28 +1628,48 @@ def process_payment(visit_id):
                     status = 'Paid',
                     updated_at = ?
                 WHERE id = ?
-            ''', (discounted_total, discount_amount, discount_reason, now, visit_id))
+            ''', (amount_due, discount_amount, discount_reason or None, now, visit_id))
             
         elif payment_mode == 'loan':
-            # Loan: partial payment, witness required
+            # Loan: partial payment, witness required. A discount may also
+            # be applied, reducing the effective amount owed.
             amount_paid = data.get('amount_paid')
-            witness_name = data.get('witness_name', '').strip()
+            witness_id = data.get('witness_id')
             loan_due_date = data.get('loan_due_date')
-            
+            discount_amount = data.get('discount_amount') or 0
+            discount_reason = (data.get('discount_reason') or '').strip()
+
+            if discount_amount < 0:
+                conn.rollback()
+                conn.close()
+                return {'success': False, 'error': 'Invalid discount amount.'}
+
+            if discount_amount > total_fee:
+                conn.rollback()
+                conn.close()
+                return {'success': False, 'error': 'Discount cannot exceed the total fee.'}
+
+            if discount_amount > 0 and not discount_reason:
+                conn.rollback()
+                conn.close()
+                return {'success': False, 'error': 'Discount reason is required.'}
+
+            effective_total = total_fee - discount_amount
+
             if amount_paid is None or amount_paid < 0:
                 conn.rollback()
                 conn.close()
                 return {'success': False, 'error': 'Invalid payment amount.'}
             
-            if amount_paid >= total_fee:
+            if amount_paid >= effective_total:
                 conn.rollback()
                 conn.close()
                 return {'success': False, 'error': 'Loan only applies to partial payments. Use Full Payment instead.'}
             
-            if not witness_name:
+            if not witness_id:
                 conn.rollback()
                 conn.close()
-                return {'success': False, 'error': 'Witness name is required for loans.'}
+                return {'success': False, 'error': 'Witness is required for loans.'}
             
             # Validate due date format if provided
             if loan_due_date and loan_due_date.strip():
@@ -1606,19 +1681,26 @@ def process_payment(visit_id):
                     return {'success': False, 'error': 'Invalid due date format. Use YYYY-MM-DD.'}
             else:
                 loan_due_date = None
+
+            # Fetch witness name to store in the text column for legacy support
+            cursor.execute("SELECT full_name FROM staff WHERE id = ? AND is_active = 1", (witness_id,))
+            witness_row = cursor.fetchone()
+            witness_name = witness_row[0] if witness_row else 'Unknown Staff'
             
             cursor.execute('''
                 UPDATE visits
                 SET amount_paid = ?,
                     loan_witness = ?,
                     loan_due_date = ?,
+                    discount_amount = ?,
+                    discount_reason = ?,
                     status = 'Loan Active',
                     updated_at = ?
                 WHERE id = ?
-            ''', (amount_paid, witness_name, loan_due_date, now, visit_id))
+            ''', (amount_paid, witness_name, loan_due_date, discount_amount, discount_reason or None, now, visit_id))
             
             # Record initial loan payment in loan_payments table
-            loan_balance = total_fee - amount_paid
+            loan_balance = effective_total - amount_paid
             if loan_balance > 0:
                 cursor.execute('''
                     INSERT INTO loan_payments (uuid, visit_id, payment_date, amount, created_at)
@@ -1627,22 +1709,7 @@ def process_payment(visit_id):
         
         # ------------------------------------------------------------------
         # INVENTORY DEDUCTION: FEFO (First-Expired, First-Out)
-        # For each visit_item, deduct from the soonest-expiring active
-        # batch first, spilling over to the next batch as needed.
-        #
-        # IMPORTANT: we deduct by item NAME, not by visit_items.inventory_id.
-        # inventory_id is just whichever single batch the price_list entry
-        # happened to point at when it was first linked -- it does NOT
-        # track every batch of that drug. If that one batch later runs
-        # out and new stock arrives as a NEW inventory row (a new batch,
-        # which is the normal way to add stock with its own expiry date),
-        # visit_items.inventory_id keeps pointing at the now-empty old
-        # batch forever. Deducting strictly by id would then always find
-        # quantity=0 and silently deduct nothing, even though the drug is
-        # clearly in stock under a different batch. Matching by name
-        # (same normalization as the stock-check query on the visit form:
-        # LOWER(TRIM(item_name))) finds every batch for that drug, the
-        # same way the visit form already correctly finds stock.
+        # This logic remains completely identical to your original working code
         # ------------------------------------------------------------------
         cursor.execute('''
             SELECT visit_items.item_name, visit_items.quantity
@@ -1653,8 +1720,6 @@ def process_payment(visit_id):
         items_to_deduct = cursor.fetchall()
         
         for item_name, qty_to_deduct in items_to_deduct:
-            # Get all active batches for this item by name, sorted by
-            # expiry so the soonest-expiring stock is used first.
             cursor.execute('''
                 SELECT id, quantity, expiry_date
                 FROM inventory
@@ -1680,9 +1745,6 @@ def process_payment(visit_id):
                     remaining -= deduct
             
             if remaining > 0:
-                # Genuinely out of stock across every batch -- this is a
-                # real shortfall, not a matching bug, so it's still worth
-                # logging loudly.
                 print(f"WARNING: Could not fully deduct {item_name}, still {remaining} units short")
         
         conn.commit()
@@ -1774,7 +1836,7 @@ def add_loan_payment(visit_id):
     
     try:
         cursor.execute('''
-            SELECT total_fee, amount_paid, status
+            SELECT total_fee, amount_paid, status, discount_amount
             FROM visits WHERE id = ?
         ''', (visit_id,))
         visit = cursor.fetchone()
@@ -1783,7 +1845,8 @@ def add_loan_payment(visit_id):
             conn.close()
             return {'success': False, 'error': 'Visit not found.'}
         
-        total_fee, current_paid, status = visit
+        total_fee, current_paid, status, discount_amount = visit
+        effective_total = total_fee - (discount_amount or 0)
         
         if status != 'Loan Active':
             conn.close()
@@ -1791,7 +1854,7 @@ def add_loan_payment(visit_id):
         
         new_total_paid = current_paid + amount
         
-        if new_total_paid > total_fee:
+        if new_total_paid > effective_total:
             conn.close()
             return {'success': False, 'error': 'Payment exceeds remaining loan balance.'}
         
@@ -1812,7 +1875,7 @@ def add_loan_payment(visit_id):
         ''', (new_total_paid, now, visit_id))
         
         # If fully paid, mark as Paid
-        if new_total_paid >= total_fee:
+        if new_total_paid >= effective_total:
             cursor.execute('''
                 UPDATE visits
                 SET status = 'Paid',
@@ -1984,6 +2047,99 @@ def retail():
 
     return render_template('retail.html', items=items, role=session.get('role'))
 
+@app.route('/retail/create_draft', methods=['POST'])
+def retail_create_draft():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return {'success': False, 'error': 'No clinic selected.'}
+    
+    data = request.get_json()
+    cart = data.get('cart', [])
+    
+    if not cart:
+        return {'success': False, 'error': 'Cart is empty.'}
+    
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    
+    try:
+        total_fee = 0
+        now = datetime.datetime.now().isoformat()
+        today_str = datetime.date.today().isoformat()
+        visit_items = []
+
+        # Calculate and validate cart
+        for item in cart:
+            cursor.execute('''
+                SELECT price_list.id, price_list.item_name, price_list.item_type, price_list.price, 
+                       price_list.quantity AS pack_quantity, price_list.inventory_id,
+                       COALESCE(stock.usable_qty, 0) AS usable_qty
+                FROM price_list
+                LEFT JOIN inventory AS linked_item ON price_list.inventory_id = linked_item.id
+                LEFT JOIN (
+                    SELECT LOWER(TRIM(item_name)) AS name_key, category,
+                           SUM(CASE WHEN expiry_date >= ? THEN quantity ELSE 0 END) AS usable_qty
+                    FROM inventory WHERE is_active = 1 GROUP BY name_key, category
+                ) AS stock ON stock.name_key = LOWER(TRIM(linked_item.item_name)) 
+                         AND stock.category = linked_item.category
+                WHERE price_list.id = ? AND price_list.is_active = 1
+            ''', (today_str, item['price_list_id']))
+            
+            row = cursor.fetchone()
+            if not row:
+                conn.close()
+                return {'success': False, 'error': f'Item not found: {item["name"]}'}
+            
+            pl_id, pl_name, pl_type, pl_price, pl_pack_qty, pl_inv_id, usable_qty = row
+            qty_sold = item['qty']
+
+            if pl_inv_id is not None and qty_sold > usable_qty:
+                conn.close()
+                return {'success': False, 'error': f'Only {usable_qty} units of "{pl_name}" available.'}
+            
+            pack_qty = pl_pack_qty if pl_pack_qty and pl_pack_qty > 0 else 1
+            price_per_unit = pl_price / pack_qty
+            line_total = round(price_per_unit * qty_sold)
+            total_fee += line_total
+
+            visit_items.append({
+                'pl_id': pl_id,
+                'pl_name': pl_name,
+                'pl_type': pl_type,
+                'pl_inv_id': pl_inv_id,
+                'qty_sold': qty_sold,
+                'price_per_unit': price_per_unit,
+                'line_total': line_total
+            })
+            
+        # Create the draft visit (status = Ready for Cashier)
+        cursor.execute('''
+            INSERT INTO visits (uuid, clinic_id, patient_id, doctor_id, appointment_id, visit_date, 
+                                diagnosis, total_fee, amount_paid, status, created_at, updated_at, is_retail)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (str(uuid.uuid4()), clinic_id, None, None, None, now, 'Retail Sale', total_fee, 0, 'Ready for Cashier', now, now, 1))
+        
+        visit_id = cursor.lastrowid
+        
+        # Insert visit items
+        for item in visit_items:
+            cursor.execute('''
+                INSERT INTO visit_items (uuid, visit_id, inventory_id, price_list_id, item_type, item_name,
+                                         quantity, price_per_unit, total_line_price, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (str(uuid.uuid4()), visit_id, item['pl_inv_id'], item['pl_id'], item['pl_type'], item['pl_name'], 
+                  item['qty_sold'], round(item['price_per_unit']), item['line_total'], now))
+        
+        conn.commit()
+        conn.close()
+        return {'success': True, 'visit_id': visit_id}
+        
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return {'success': False, 'error': str(e)}    
+    
+
 # ------------------------------------------------------------------
 # FINANCE & REPORTING DASHBOARD
 # ------------------------------------------------------------------
@@ -2021,17 +2177,36 @@ def finance():
         end_date = today.isoformat() + 'T23:59:59'
         period = 'week'  # fallback
     
-    # 1. Total Cash Collected (visits marked Paid, amount_paid within period)
+    # 1. Total Cash Collected
+    # Two sources, mutually exclusive (a visit is either fully Paid in one
+    # go, or it's/was a loan whose payments live in loan_payments):
+    #   a) Visits paid in full directly (never went through Loan Active)
+    #   b) Every loan payment recorded in loan_payments (the initial
+    #      partial payment AND every later repayment), dated by when that
+    #      specific payment actually happened -- not by the visit's
+    #      updated_at, which only reflects the most recent touch.
     cursor.execute('''
         SELECT SUM(amount_paid) FROM visits 
         WHERE status = 'Paid' 
+        AND id NOT IN (SELECT DISTINCT visit_id FROM loan_payments)
         AND updated_at >= ? AND updated_at <= ?
     ''', (start_date, end_date))
-    total_cash = cursor.fetchone()[0] or 0
-    
-    # 2. Outstanding Loans (active loans, total remaining balance)
+    total_cash_direct = cursor.fetchone()[0] or 0
+
     cursor.execute('''
-        SELECT SUM(total_fee - amount_paid) FROM visits 
+        SELECT SUM(amount) FROM loan_payments
+        WHERE payment_date >= ? AND payment_date <= ?
+    ''', (start_date, end_date))
+    total_cash_from_loans = cursor.fetchone()[0] or 0
+
+    total_cash = total_cash_direct + total_cash_from_loans
+    
+    # 2. Outstanding Loans (active loans, total remaining balance).
+    # Balance owed is total_fee minus any discount minus what's been
+    # paid so far -- discount_amount must be subtracted here too, or a
+    # discounted loan shows a higher "still owed" figure than is real.
+    cursor.execute('''
+        SELECT SUM(total_fee - COALESCE(discount_amount, 0) - amount_paid) FROM visits 
         WHERE status = 'Loan Active'
     ''')
     outstanding_loans = cursor.fetchone()[0] or 0
@@ -2044,8 +2219,13 @@ def finance():
     ''', (start_date, end_date))
     total_discounts = cursor.fetchone()[0] or 0
     
-    # 4. Net Revenue (Cash - Discounts)
-    net_revenue = total_cash - total_discounts
+    # 4. Net Revenue = Total Cash collected. total_cash is already net of
+    # any discount (amount_paid / loan_payments.amount are computed as
+    # total_fee minus discount_amount at payment time), so discounts must
+    # NOT be subtracted again here -- that would double-count them.
+    # "Discounts Given" below is shown purely as an informational figure
+    # (how much revenue was forgone), not as a deduction from cash.
+    net_revenue = total_cash
     
     # 5. Total Expenses (within period)
     cursor.execute('''

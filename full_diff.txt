@@ -1,0 +1,1736 @@
+diff --git a/app.py b/app.py
+index 87c806a..369f0c3 100644
+--- a/app.py
++++ b/app.py
+@@ -1,6 +1,7 @@
+ import sqlite3
+ import datetime
+ import uuid
++import math
+ from flask import Flask, render_template, request, redirect, url_for, send_from_directory, session, flash
+ from werkzeug.security import check_password_hash, generate_password_hash
+ 
+@@ -118,8 +119,7 @@ def init_db():
+     cursor.execute('CREATE INDEX IF NOT EXISTS idx_appointments_uuid ON appointments(uuid);')
+     cursor.execute('CREATE INDEX IF NOT EXISTS idx_appointments_clinic ON appointments(clinic_id);')
+     
+-    # 5. visits
+-        # 5. visits (Updated with discount and loan columns)
++    # 5. visits (Added columns for payment channels, medical aid, and retail flag)
+     cursor.execute('''
+         CREATE TABLE IF NOT EXISTS visits (
+             id INTEGER PRIMARY KEY AUTOINCREMENT,
+@@ -142,12 +142,21 @@ def init_db():
+             created_at TEXT,
+             updated_at TEXT,
+             is_synced INTEGER DEFAULT 0,
++            
++            -- NEW COLUMNS START HERE --
++            payment_channel TEXT DEFAULT 'Cash',
++            payment_reference TEXT,
++            medical_aid_company TEXT,
++            is_retail INTEGER DEFAULT 0,
++            -- NEW COLUMNS END HERE --
++
+             FOREIGN KEY (clinic_id) REFERENCES clinics (id),
+             FOREIGN KEY (patient_id) REFERENCES patients (id),
+             FOREIGN KEY (doctor_id) REFERENCES staff (id),
+             FOREIGN KEY (appointment_id) REFERENCES appointments (id)
+         )
+     ''')
++    
+     cursor.execute('CREATE INDEX IF NOT EXISTS idx_visits_uuid ON visits(uuid);')
+     cursor.execute('CREATE INDEX IF NOT EXISTS idx_visits_clinic ON visits(clinic_id);')
+     cursor.execute('CREATE INDEX IF NOT EXISTS idx_visits_appointment ON visits(appointment_id);')
+@@ -1153,7 +1162,22 @@ def price_list_history(item_id):
+             'changed_at': r[6],
+             'changed_by': r[7] or 'System'
+         } for r in rows]
+-    }    
++    }  
++    
++    
++@app.route('/api/staff/list')
++def api_staff_list():
++    """Return a JSON list of active staff members for the witness dropdown."""
++    clinic_id = get_current_clinic_id()
++    if not clinic_id:
++        return {'error': 'No clinic'}, 403
++    conn = sqlite3.connect('clinic.db')
++    cursor = conn.cursor()
++    cursor.execute("SELECT id, full_name FROM staff WHERE clinic_id = ? AND is_active = 1 ORDER BY full_name", (clinic_id,))
++    staff = cursor.fetchall()
++    conn.close()
++    return {'staff': [{'id': s[0], 'name': s[1]} for s in staff]}    
++    
+     
+ @app.route('/visit/<int:patient_id>', methods=['GET', 'POST'])
+ def visit(patient_id):
+@@ -1485,7 +1509,7 @@ def process_payment(visit_id):
+     data = request.get_json()
+     payment_mode = data.get('payment_mode')
+     
+-    if payment_mode not in ['full', 'discount', 'loan']:
++    if payment_mode not in ['full', 'loan']:
+         return {'success': False, 'error': 'Invalid payment mode.'}
+     
+     conn = sqlite3.connect('clinic.db')
+@@ -1494,7 +1518,7 @@ def process_payment(visit_id):
+     try:
+         # Get the visit details
+         cursor.execute('''
+-            SELECT total_fee, amount_paid, status, patient_id, appointment_id
++            SELECT total_fee, amount_paid, status, patient_id, appointment_id, loan_witness
+             FROM visits WHERE id = ?
+         ''', (visit_id,))
+         visit_row = cursor.fetchone()
+@@ -1503,7 +1527,7 @@ def process_payment(visit_id):
+             conn.close()
+             return {'success': False, 'error': 'Visit not found.'}
+         
+-        total_fee, current_paid, status, patient_id, appointment_id = visit_row
++        total_fee, current_paid, status, patient_id, appointment_id, existing_witness = visit_row
+         
+         if status not in ['Ready for Cashier', 'Loan Active']:
+             conn.close()
+@@ -1511,60 +1535,91 @@ def process_payment(visit_id):
+         
+         now = datetime.datetime.now().isoformat()
+ 
+-        # Atomically "claim" this visit for payment before doing anything
+-        # else (status update, loan_payments insert, inventory deduction).
+-        # The SELECT above can't prevent two near-simultaneous requests
+-        # (e.g. a fast double-click on "Confirm & Complete") from both
+-        # reading 'Ready for Cashier'/'Loan Active' before either commits
+-        # -- both would then pass the check and BOTH would deduct
+-        # inventory. This UPDATE...WHERE re-checks status in the same
+-        # statement that changes it, so only the request that actually
+-        # sees the still-unclaimed row gets rowcount=1 and proceeds; the
+-        # other gets rowcount=0 and is rejected as already-processed.
++        # Atomically "claim" this visit
+         cursor.execute('''
+             UPDATE visits SET status = 'Processing', updated_at = ?
+             WHERE id = ? AND status IN ('Ready for Cashier', 'Loan Active')
+         ''', (now, visit_id))
+ 
+         if cursor.rowcount == 0:
+-            # Someone else (or another click from the same person) already
+-            # claimed this visit for payment a moment ago.
+             conn.close()
+             return {'success': False, 'error': 'This payment was already processed.'}
+-        
+-        if payment_mode == 'full':
+-            # Full Payment: mark as fully paid
++
++        # ROUNDING: the cashier may choose to round the invoice total to
++        # the nearest MK 100-1000 to avoid decimals. If a rounded_total is
++        # supplied, validate it against the cashier's chosen rounding step
++        # and against the original total_fee (it can only round to the
++        # nearest multiple -- never an arbitrary value) and then persist it
++        # as the visit's real total_fee. This is a genuine adjustment to
++        # what's billed, not a discount, so it happens before any discount
++        # math and isn't recorded as one.
++        rounded_total = data.get('rounded_total')
++        round_to = data.get('round_to') or 0
++        if rounded_total is not None and round_to:
++            try:
++                rounded_total = int(rounded_total)
++                round_to_tambala = int(round_to) * 100
++            except (TypeError, ValueError):
++                conn.rollback()
++                conn.close()
++                return {'success': False, 'error': 'Invalid rounding value.'}
++
++            if round_to_tambala <= 0 or round_to_tambala % 10000 != 0:
++                conn.rollback()
++                conn.close()
++                return {'success': False, 'error': 'Invalid rounding step.'}
++
++            # Use floor(x + 0.5) for round-half-up, matching JavaScript's
++            # Math.round() exactly. Python's built-in round() uses
++            # banker's rounding (round-half-to-even), which disagrees
++            # with the frontend at exact halfway points (e.g. 12.5) and
++            # would cause this validation to wrongly reject a legitimate
++            # rounding choice.
++            expected_rounded = math.floor(total_fee / round_to_tambala + 0.5) * round_to_tambala
++            if rounded_total != expected_rounded:
++                conn.rollback()
++                conn.close()
++                return {'success': False, 'error': 'Rounded total does not match the selected rounding step.'}
++
+             cursor.execute('''
+-                UPDATE visits
+-                SET amount_paid = total_fee,
+-                    discount_amount = 0,
+-                    discount_reason = NULL,
+-                    status = 'Paid',
+-                    updated_at = ?
++                UPDATE visits SET total_fee = ?, updated_at = ?
+                 WHERE id = ?
+-            ''', (now, visit_id))
+-            
+-        elif payment_mode == 'discount':
+-            # Discount: total_fee remains as original, discount_amount tracks reduction
+-            discount_amount = data.get('discount_amount')
+-            discount_reason = data.get('discount_reason', '').strip()
+-            
+-            if discount_amount is None or discount_amount < 0:
++            ''', (rounded_total, now, visit_id))
++            total_fee = rounded_total
++        
++        # 1. SAVE PAYMENT CHANNEL INFO
++        payment_channel = data.get('payment_channel', 'Cash')
++        payment_reference = data.get('payment_reference')
++        medical_aid_company = data.get('medical_aid_company')
++        
++        cursor.execute('''
++            UPDATE visits
++            SET payment_channel = ?, payment_reference = ?, medical_aid_company = ?
++            WHERE id = ?
++        ''', (payment_channel, payment_reference, medical_aid_company, visit_id))
++        
++        if payment_mode == 'full':
++            # Full Payment, optionally with a discount applied on top.
++            discount_amount = data.get('discount_amount') or 0
++            discount_reason = (data.get('discount_reason') or '').strip()
++
++            if discount_amount < 0:
+                 conn.rollback()
+                 conn.close()
+                 return {'success': False, 'error': 'Invalid discount amount.'}
+-            
++
+             if discount_amount > total_fee:
+                 conn.rollback()
+                 conn.close()
+                 return {'success': False, 'error': 'Discount cannot exceed the total fee.'}
+-            
+-            if not discount_reason:
++
++            if discount_amount > 0 and not discount_reason:
+                 conn.rollback()
+                 conn.close()
+                 return {'success': False, 'error': 'Discount reason is required.'}
+-            
+-            discounted_total = total_fee - discount_amount
++
++            amount_due = total_fee - discount_amount
++
+             cursor.execute('''
+                 UPDATE visits
+                 SET amount_paid = ?,
+@@ -1573,28 +1628,48 @@ def process_payment(visit_id):
+                     status = 'Paid',
+                     updated_at = ?
+                 WHERE id = ?
+-            ''', (discounted_total, discount_amount, discount_reason, now, visit_id))
++            ''', (amount_due, discount_amount, discount_reason or None, now, visit_id))
+             
+         elif payment_mode == 'loan':
+-            # Loan: partial payment, witness required
++            # Loan: partial payment, witness required. A discount may also
++            # be applied, reducing the effective amount owed.
+             amount_paid = data.get('amount_paid')
+-            witness_name = data.get('witness_name', '').strip()
++            witness_id = data.get('witness_id')
+             loan_due_date = data.get('loan_due_date')
+-            
++            discount_amount = data.get('discount_amount') or 0
++            discount_reason = (data.get('discount_reason') or '').strip()
++
++            if discount_amount < 0:
++                conn.rollback()
++                conn.close()
++                return {'success': False, 'error': 'Invalid discount amount.'}
++
++            if discount_amount > total_fee:
++                conn.rollback()
++                conn.close()
++                return {'success': False, 'error': 'Discount cannot exceed the total fee.'}
++
++            if discount_amount > 0 and not discount_reason:
++                conn.rollback()
++                conn.close()
++                return {'success': False, 'error': 'Discount reason is required.'}
++
++            effective_total = total_fee - discount_amount
++
+             if amount_paid is None or amount_paid < 0:
+                 conn.rollback()
+                 conn.close()
+                 return {'success': False, 'error': 'Invalid payment amount.'}
+             
+-            if amount_paid >= total_fee:
++            if amount_paid >= effective_total:
+                 conn.rollback()
+                 conn.close()
+                 return {'success': False, 'error': 'Loan only applies to partial payments. Use Full Payment instead.'}
+             
+-            if not witness_name:
++            if not witness_id:
+                 conn.rollback()
+                 conn.close()
+-                return {'success': False, 'error': 'Witness name is required for loans.'}
++                return {'success': False, 'error': 'Witness is required for loans.'}
+             
+             # Validate due date format if provided
+             if loan_due_date and loan_due_date.strip():
+@@ -1606,19 +1681,26 @@ def process_payment(visit_id):
+                     return {'success': False, 'error': 'Invalid due date format. Use YYYY-MM-DD.'}
+             else:
+                 loan_due_date = None
++
++            # Fetch witness name to store in the text column for legacy support
++            cursor.execute("SELECT full_name FROM staff WHERE id = ? AND is_active = 1", (witness_id,))
++            witness_row = cursor.fetchone()
++            witness_name = witness_row[0] if witness_row else 'Unknown Staff'
+             
+             cursor.execute('''
+                 UPDATE visits
+                 SET amount_paid = ?,
+                     loan_witness = ?,
+                     loan_due_date = ?,
++                    discount_amount = ?,
++                    discount_reason = ?,
+                     status = 'Loan Active',
+                     updated_at = ?
+                 WHERE id = ?
+-            ''', (amount_paid, witness_name, loan_due_date, now, visit_id))
++            ''', (amount_paid, witness_name, loan_due_date, discount_amount, discount_reason or None, now, visit_id))
+             
+             # Record initial loan payment in loan_payments table
+-            loan_balance = total_fee - amount_paid
++            loan_balance = effective_total - amount_paid
+             if loan_balance > 0:
+                 cursor.execute('''
+                     INSERT INTO loan_payments (uuid, visit_id, payment_date, amount, created_at)
+@@ -1627,22 +1709,7 @@ def process_payment(visit_id):
+         
+         # ------------------------------------------------------------------
+         # INVENTORY DEDUCTION: FEFO (First-Expired, First-Out)
+-        # For each visit_item, deduct from the soonest-expiring active
+-        # batch first, spilling over to the next batch as needed.
+-        #
+-        # IMPORTANT: we deduct by item NAME, not by visit_items.inventory_id.
+-        # inventory_id is just whichever single batch the price_list entry
+-        # happened to point at when it was first linked -- it does NOT
+-        # track every batch of that drug. If that one batch later runs
+-        # out and new stock arrives as a NEW inventory row (a new batch,
+-        # which is the normal way to add stock with its own expiry date),
+-        # visit_items.inventory_id keeps pointing at the now-empty old
+-        # batch forever. Deducting strictly by id would then always find
+-        # quantity=0 and silently deduct nothing, even though the drug is
+-        # clearly in stock under a different batch. Matching by name
+-        # (same normalization as the stock-check query on the visit form:
+-        # LOWER(TRIM(item_name))) finds every batch for that drug, the
+-        # same way the visit form already correctly finds stock.
++        # This logic remains completely identical to your original working code
+         # ------------------------------------------------------------------
+         cursor.execute('''
+             SELECT visit_items.item_name, visit_items.quantity
+@@ -1653,8 +1720,6 @@ def process_payment(visit_id):
+         items_to_deduct = cursor.fetchall()
+         
+         for item_name, qty_to_deduct in items_to_deduct:
+-            # Get all active batches for this item by name, sorted by
+-            # expiry so the soonest-expiring stock is used first.
+             cursor.execute('''
+                 SELECT id, quantity, expiry_date
+                 FROM inventory
+@@ -1680,9 +1745,6 @@ def process_payment(visit_id):
+                     remaining -= deduct
+             
+             if remaining > 0:
+-                # Genuinely out of stock across every batch -- this is a
+-                # real shortfall, not a matching bug, so it's still worth
+-                # logging loudly.
+                 print(f"WARNING: Could not fully deduct {item_name}, still {remaining} units short")
+         
+         conn.commit()
+@@ -1774,7 +1836,7 @@ def add_loan_payment(visit_id):
+     
+     try:
+         cursor.execute('''
+-            SELECT total_fee, amount_paid, status
++            SELECT total_fee, amount_paid, status, discount_amount
+             FROM visits WHERE id = ?
+         ''', (visit_id,))
+         visit = cursor.fetchone()
+@@ -1783,7 +1845,8 @@ def add_loan_payment(visit_id):
+             conn.close()
+             return {'success': False, 'error': 'Visit not found.'}
+         
+-        total_fee, current_paid, status = visit
++        total_fee, current_paid, status, discount_amount = visit
++        effective_total = total_fee - (discount_amount or 0)
+         
+         if status != 'Loan Active':
+             conn.close()
+@@ -1791,7 +1854,7 @@ def add_loan_payment(visit_id):
+         
+         new_total_paid = current_paid + amount
+         
+-        if new_total_paid > total_fee:
++        if new_total_paid > effective_total:
+             conn.close()
+             return {'success': False, 'error': 'Payment exceeds remaining loan balance.'}
+         
+@@ -1812,7 +1875,7 @@ def add_loan_payment(visit_id):
+         ''', (new_total_paid, now, visit_id))
+         
+         # If fully paid, mark as Paid
+-        if new_total_paid >= total_fee:
++        if new_total_paid >= effective_total:
+             cursor.execute('''
+                 UPDATE visits
+                 SET status = 'Paid',
+@@ -1984,6 +2047,99 @@ def retail():
+ 
+     return render_template('retail.html', items=items, role=session.get('role'))
+ 
++@app.route('/retail/create_draft', methods=['POST'])
++def retail_create_draft():
++    clinic_id = get_current_clinic_id()
++    if not clinic_id:
++        return {'success': False, 'error': 'No clinic selected.'}
++    
++    data = request.get_json()
++    cart = data.get('cart', [])
++    
++    if not cart:
++        return {'success': False, 'error': 'Cart is empty.'}
++    
++    conn = sqlite3.connect('clinic.db')
++    cursor = conn.cursor()
++    
++    try:
++        total_fee = 0
++        now = datetime.datetime.now().isoformat()
++        today_str = datetime.date.today().isoformat()
++        visit_items = []
++
++        # Calculate and validate cart
++        for item in cart:
++            cursor.execute('''
++                SELECT price_list.id, price_list.item_name, price_list.item_type, price_list.price, 
++                       price_list.quantity AS pack_quantity, price_list.inventory_id,
++                       COALESCE(stock.usable_qty, 0) AS usable_qty
++                FROM price_list
++                LEFT JOIN inventory AS linked_item ON price_list.inventory_id = linked_item.id
++                LEFT JOIN (
++                    SELECT LOWER(TRIM(item_name)) AS name_key, category,
++                           SUM(CASE WHEN expiry_date >= ? THEN quantity ELSE 0 END) AS usable_qty
++                    FROM inventory WHERE is_active = 1 GROUP BY name_key, category
++                ) AS stock ON stock.name_key = LOWER(TRIM(linked_item.item_name)) 
++                         AND stock.category = linked_item.category
++                WHERE price_list.id = ? AND price_list.is_active = 1
++            ''', (today_str, item['price_list_id']))
++            
++            row = cursor.fetchone()
++            if not row:
++                conn.close()
++                return {'success': False, 'error': f'Item not found: {item["name"]}'}
++            
++            pl_id, pl_name, pl_type, pl_price, pl_pack_qty, pl_inv_id, usable_qty = row
++            qty_sold = item['qty']
++
++            if pl_inv_id is not None and qty_sold > usable_qty:
++                conn.close()
++                return {'success': False, 'error': f'Only {usable_qty} units of "{pl_name}" available.'}
++            
++            pack_qty = pl_pack_qty if pl_pack_qty and pl_pack_qty > 0 else 1
++            price_per_unit = pl_price / pack_qty
++            line_total = round(price_per_unit * qty_sold)
++            total_fee += line_total
++
++            visit_items.append({
++                'pl_id': pl_id,
++                'pl_name': pl_name,
++                'pl_type': pl_type,
++                'pl_inv_id': pl_inv_id,
++                'qty_sold': qty_sold,
++                'price_per_unit': price_per_unit,
++                'line_total': line_total
++            })
++            
++        # Create the draft visit (status = Ready for Cashier)
++        cursor.execute('''
++            INSERT INTO visits (uuid, clinic_id, patient_id, doctor_id, appointment_id, visit_date, 
++                                diagnosis, total_fee, amount_paid, status, created_at, updated_at, is_retail)
++            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
++        ''', (str(uuid.uuid4()), clinic_id, None, None, None, now, 'Retail Sale', total_fee, 0, 'Ready for Cashier', now, now, 1))
++        
++        visit_id = cursor.lastrowid
++        
++        # Insert visit items
++        for item in visit_items:
++            cursor.execute('''
++                INSERT INTO visit_items (uuid, visit_id, inventory_id, price_list_id, item_type, item_name,
++                                         quantity, price_per_unit, total_line_price, created_at)
++                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
++            ''', (str(uuid.uuid4()), visit_id, item['pl_inv_id'], item['pl_id'], item['pl_type'], item['pl_name'], 
++                  item['qty_sold'], round(item['price_per_unit']), item['line_total'], now))
++        
++        conn.commit()
++        conn.close()
++        return {'success': True, 'visit_id': visit_id}
++        
++    except Exception as e:
++        conn.rollback()
++        conn.close()
++        return {'success': False, 'error': str(e)}    
++    
++
+ # ------------------------------------------------------------------
+ # FINANCE & REPORTING DASHBOARD
+ # ------------------------------------------------------------------
+@@ -2021,17 +2177,36 @@ def finance():
+         end_date = today.isoformat() + 'T23:59:59'
+         period = 'week'  # fallback
+     
+-    # 1. Total Cash Collected (visits marked Paid, amount_paid within period)
++    # 1. Total Cash Collected
++    # Two sources, mutually exclusive (a visit is either fully Paid in one
++    # go, or it's/was a loan whose payments live in loan_payments):
++    #   a) Visits paid in full directly (never went through Loan Active)
++    #   b) Every loan payment recorded in loan_payments (the initial
++    #      partial payment AND every later repayment), dated by when that
++    #      specific payment actually happened -- not by the visit's
++    #      updated_at, which only reflects the most recent touch.
+     cursor.execute('''
+         SELECT SUM(amount_paid) FROM visits 
+         WHERE status = 'Paid' 
++        AND id NOT IN (SELECT DISTINCT visit_id FROM loan_payments)
+         AND updated_at >= ? AND updated_at <= ?
+     ''', (start_date, end_date))
+-    total_cash = cursor.fetchone()[0] or 0
++    total_cash_direct = cursor.fetchone()[0] or 0
++
++    cursor.execute('''
++        SELECT SUM(amount) FROM loan_payments
++        WHERE payment_date >= ? AND payment_date <= ?
++    ''', (start_date, end_date))
++    total_cash_from_loans = cursor.fetchone()[0] or 0
++
++    total_cash = total_cash_direct + total_cash_from_loans
+     
+-    # 2. Outstanding Loans (active loans, total remaining balance)
++    # 2. Outstanding Loans (active loans, total remaining balance).
++    # Balance owed is total_fee minus any discount minus what's been
++    # paid so far -- discount_amount must be subtracted here too, or a
++    # discounted loan shows a higher "still owed" figure than is real.
+     cursor.execute('''
+-        SELECT SUM(total_fee - amount_paid) FROM visits 
++        SELECT SUM(total_fee - COALESCE(discount_amount, 0) - amount_paid) FROM visits 
+         WHERE status = 'Loan Active'
+     ''')
+     outstanding_loans = cursor.fetchone()[0] or 0
+@@ -2044,8 +2219,13 @@ def finance():
+     ''', (start_date, end_date))
+     total_discounts = cursor.fetchone()[0] or 0
+     
+-    # 4. Net Revenue (Cash - Discounts)
+-    net_revenue = total_cash - total_discounts
++    # 4. Net Revenue = Total Cash collected. total_cash is already net of
++    # any discount (amount_paid / loan_payments.amount are computed as
++    # total_fee minus discount_amount at payment time), so discounts must
++    # NOT be subtracted again here -- that would double-count them.
++    # "Discounts Given" below is shown purely as an informational figure
++    # (how much revenue was forgone), not as a deduction from cash.
++    net_revenue = total_cash
+     
+     # 5. Total Expenses (within period)
+     cursor.execute('''
+diff --git a/templates/cashier.html b/templates/cashier.html
+index 749c083..d5700e0 100644
+--- a/templates/cashier.html
++++ b/templates/cashier.html
+@@ -50,14 +50,6 @@
+                             {% endif %}
+                         </td>
+                         <td class="text-end">
+-                            <!-- VIEW INVOICE BUTTON (Visible to everyone) -->
+-                            <button class="btn btn-outline-secondary btn-sm view-invoice-btn me-1"
+-                                    data-id="{{ visit[0] }}"
+-                                    data-patient="{{ visit[11] }}"
+-                                    style="font-size: 0.75rem;">
+-                                📄 View
+-                            </button>
+-
+                             {% if visit[7] == 'Loan Active' %}
+                                 <a href="/cashier/loan/{{ visit[0] }}" class="btn btn-outline-info btn-sm">
+                                     📋 Loan
+@@ -68,10 +60,7 @@
+                                         data-total="{{ visit[4] }}"
+                                         data-paid="{{ visit[5] }}"
+                                         data-status="{{ visit[7] }}"
+-                                        data-patient="{{ visit[11] }}"
+-                                        data-discount-amount="{{ visit[8] or 0 }}"
+-                                        data-discount-reason="{{ visit[9] or '' }}"
+-                                        data-loan-due="{{ visit[10] or '' }}">
++                                        data-patient="{{ visit[11] }}">
+                                     💳 Process
+                                 </button>
+                             {% endif %}
+@@ -88,124 +77,8 @@
+     </div>
+ </div>
+ 
+-<!-- Payment Processing Modal -->
+-<div class="modal fade" id="paymentModal" tabindex="-1">
+-    <div class="modal-dialog modal-lg">
+-        <div class="modal-content">
+-            <div class="modal-header bg-dark text-white">
+-                <h5 class="modal-title">💳 Process Payment</h5>
+-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+-            </div>
+-            <div class="modal-body">
+-                <div id="modalPatientInfo" class="mb-3">
+-                    <h6 id="modalPatientName" class="mb-0"></h6>
+-                    <small class="text-muted">Total: <span id="modalTotalFee">MK 0.00</span></small>
+-                </div>
+-
+-                <div class="mb-3">
+-                    <label class="form-label fw-bold">Payment Mode</label>
+-                    <div class="btn-group w-100" role="group">
+-                        <input type="radio" class="btn-check" name="paymentMode" id="modeFull" value="full" checked>
+-                        <label class="btn btn-outline-success" for="modeFull">✅ Full Payment</label>
+-                        
+-                        <input type="radio" class="btn-check" name="paymentMode" id="modeDiscount" value="discount">
+-                        <label class="btn btn-outline-primary" for="modeDiscount">🏷️ Discount</label>
+-                        
+-                        <input type="radio" class="btn-check" name="paymentMode" id="modeLoan" value="loan">
+-                        <label class="btn btn-outline-warning" for="modeLoan">📋 Loan</label>
+-                    </div>
+-                </div>
+-
+-                <!-- Full Payment: no extra fields -->
+-                <div id="fullPaymentInfo" class="alert alert-success">
+-                    <p class="mb-0">The patient will pay the full amount: <strong id="fullAmountDisplay">MK 0.00</strong></p>
+-                </div>
+-
+-                <!-- Discount: amount + reason -->
+-                <div id="discountFields" style="display: none;">
+-                    <div class="mb-3">
+-                        <label class="form-label fw-bold">Discount Amount (MK)</label>
+-                        <input type="number" step="0.01" id="discountAmount" class="form-control" placeholder="e.g. 500.00" min="0">
+-                    </div>
+-                    <div class="mb-3">
+-                        <label class="form-label fw-bold">Discount Reason <span class="text-danger">*</span></label>
+-                        <input type="text" id="discountReason" class="form-control" placeholder="e.g. Staff discount, hardship case, etc.">
+-                    </div>
+-                    <div class="alert alert-info">
+-                        <strong>New total:</strong> <span id="discountedTotalDisplay">MK 0.00</span>
+-                    </div>
+-                </div>
+-
+-                <!-- Loan: amount paid + witness + due date -->
+-                <div id="loanFields" style="display: none;">
+-                    <div class="mb-3">
+-                        <label class="form-label fw-bold">Amount Paid Now (MK) <span class="text-danger">*</span></label>
+-                        <input type="number" step="0.01" id="loanAmount" class="form-control" placeholder="e.g. 1500.00" min="0">
+-                        <small class="text-muted">Remaining balance: <span id="loanRemainingDisplay">MK 0.00</span></small>
+-                    </div>
+-                    <div class="mb-3">
+-                        <label class="form-label fw-bold">Witness Name <span class="text-danger">*</span></label>
+-                        <input type="text" id="loanWitness" class="form-control" placeholder="Full name of witness">
+-                    </div>
+-                    <div class="mb-3">
+-                        <label class="form-label fw-bold">Due Date (Optional)</label>
+-                        <input type="date" id="loanDueDate" class="form-control">
+-                    </div>
+-                </div>
+-            </div>
+-            <div class="modal-footer">
+-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+-                <button type="button" class="btn btn-success" id="confirmPaymentBtn">✅ Confirm & Complete</button>
+-            </div>
+-        </div>
+-    </div>
+-</div>
+-
+-<!-- View Invoice Modal -->
+-<div class="modal fade" id="viewInvoiceModal" tabindex="-1">
+-    <div class="modal-dialog modal-lg">
+-        <div class="modal-content">
+-            <div class="modal-header bg-secondary text-white">
+-                <h5 class="modal-title">📄 Invoice Details</h5>
+-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+-            </div>
+-            <div class="modal-body">
+-                <div class="mb-3">
+-                    <h6 id="invPatientName" class="mb-0"></h6>
+-                    <small class="text-muted">Diagnosis: <span id="invDiagnosis"></span></small>
+-                </div>
+-                <div class="table-responsive">
+-                    <table class="table table-sm table-bordered">
+-                        <thead class="table-light">
+-                            <tr>
+-                                <th>Type</th>
+-                                <th>Item</th>
+-                                <th class="text-end">Unit Price</th>
+-                                <th class="text-end">Qty</th>
+-                                <th class="text-end">Total</th>
+-                            </tr>
+-                        </thead>
+-                        <tbody id="invoiceItemsBody">
+-                            <tr><td colspan="5" class="text-center text-muted">Loading...</td></tr>
+-                        </tbody>
+-                        <tfoot>
+-                            <tr>
+-                                <th colspan="4" class="text-end">Grand Total</th>
+-                                <th class="text-end" id="invTotal">MK 0.00</th>
+-                            </tr>
+-                        </tfoot>
+-                    </table>
+-                </div>
+-            </div>
+-            <div class="modal-footer">
+-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+-                <button type="button" class="btn btn-primary" id="printInvoiceBtn">🖨️ Print Invoice</button>
+-            </div>
+-        </div>
+-    </div>
+-</div>
++{% include 'payment_modal.html' %}
+ 
+-<!-- JavaScript -->
+ <script>
+ document.addEventListener('DOMContentLoaded', function() {
+     // Search functionality
+@@ -226,23 +99,32 @@ document.addEventListener('DOMContentLoaded', function() {
+         noResultsMsg.style.display = (visibleCount === 0 && query.length > 0) ? 'block' : 'none';
+     });
+ 
+-    // Payment Modal Logic
++    // --- Unified Payment Modal Logic ---
+     const paymentModal = new bootstrap.Modal(document.getElementById('paymentModal'));
+     let currentVisitId = null;
+     let currentTotal = 0;
+-    let currentPaid = 0;
+-    let currentStatus = '';
++
++    // Populate Staff Witness Dropdown
++    fetch('/api/staff/list')
++        .then(res => res.json())
++        .then(data => {
++            const select = document.getElementById('loanWitness');
++            select.innerHTML = '<option value="">-- Select a staff member --</option>';
++            data.staff.forEach(s => {
++                const opt = document.createElement('option');
++                opt.value = s.id;
++                opt.textContent = s.name;
++                select.appendChild(opt);
++            });
++        });
+ 
+     document.querySelectorAll('.process-payment-btn').forEach(btn => {
+         btn.addEventListener('click', function() {
+             currentVisitId = this.getAttribute('data-id');
+             currentTotal = parseInt(this.getAttribute('data-total'));
+-            currentPaid = parseInt(this.getAttribute('data-paid'));
+-            currentStatus = this.getAttribute('data-status');
++            const currentPaid = parseInt(this.getAttribute('data-paid'));
++            const currentStatus = this.getAttribute('data-status');
+             const patientName = this.getAttribute('data-patient');
+-            const discountAmount = parseInt(this.getAttribute('data-discount-amount')) || 0;
+-            const discountReason = this.getAttribute('data-discount-reason');
+-            const loanDue = this.getAttribute('data-loan-due');
+ 
+             document.getElementById('modalPatientName').textContent = patientName;
+             document.getElementById('modalTotalFee').textContent = 'MK ' + (currentTotal / 100).toFixed(2);
+@@ -253,37 +135,80 @@ document.addEventListener('DOMContentLoaded', function() {
+             document.getElementById('discountReason').value = '';
+             document.getElementById('loanAmount').value = '';
+             document.getElementById('loanWitness').value = '';
+-            document.getElementById('loanDueDate').value = loanDue || '';
+-            
+-            // Reset to Full Payment mode
+-            document.getElementById('modeFull').checked = true;
++            document.getElementById('loanDueDate').value = '';
++            document.getElementById('paymentReference').value = '';
++            document.getElementById('paymentChannel').value = 'Cash';
++            document.getElementById('medicalAidCompany').value = '';
++            document.getElementById('medicalAidFields').style.display = 'none';
++            document.getElementById('refFieldWrapper').style.display = 'none';
++            document.getElementById('roundingSelect').value = '0';
++            updateRoundedTotalDisplay();
++
++            // Reset Payment Mode
++            document.getElementById('payFull').checked = true;
+             togglePaymentMode('full');
+ 
+-            // If it's already a loan, default to Loan mode
++            // If it's already a loan, default to Partial mode
+             if (currentStatus === 'Loan Active') {
+-                document.getElementById('modeLoan').checked = true;
+-                togglePaymentMode('loan');
++                document.getElementById('payPartial').checked = true;
++                togglePaymentMode('partial');
+                 document.getElementById('loanAmount').value = ((currentTotal - currentPaid) / 100).toFixed(2);
+                 updateLoanRemaining();
+             }
+ 
++            // Load Invoice Items
++            document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-muted">Loading items...</td></tr>';
+             paymentModal.show();
++
++            fetch('/cashier/view/' + currentVisitId)
++            .then(response => response.json())
++            .then(data => {
++                let html = '';
++                data.items.forEach(item => {
++                    html += `
++                        <tr>
++                            <td><span class="badge bg-info text-dark">${item.type}</span></td>
++                            <td><strong>${item.name}</strong></td>
++                            <td class="text-end">MK ${(item.unit_price / 100).toFixed(2)}</td>
++                            <td class="text-end">${item.qty}</td>
++                            <td class="text-end">MK ${(item.total / 100).toFixed(2)}</td>
++                        </tr>
++                    `;
++                });
++                document.getElementById('invoiceItemsBody').innerHTML = html;
++                document.getElementById('invTotal').textContent = 'MK ' + (data.total / 100).toFixed(2);
++            })
++            .catch(() => {
++                document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-danger">Error loading invoice.</td></tr>';
++            });
+         });
+     });
+ 
++    // Rounds currentTotal (the raw invoice total, in tambala) to the
++    // nearest selected MK value. "0" means no rounding. Standard
++    // round-half-up behavior so cashiers get predictable results.
++    function getRoundedBaseTotal() {
++        const roundTo = parseInt(document.getElementById('roundingSelect').value, 10) || 0;
++        if (roundTo <= 0) return currentTotal;
++        const roundToTambala = roundTo * 100;
++        return Math.round(currentTotal / roundToTambala) * roundToTambala;
++    }
++
++    function updateRoundedTotalDisplay() {
++        const rounded = getRoundedBaseTotal();
++        document.getElementById('roundedTotalDisplay').value = 'MK ' + (rounded / 100).toFixed(2);
++        document.getElementById('modalTotalFee').textContent = 'MK ' + (rounded / 100).toFixed(2);
++        document.getElementById('fullAmountDisplay').textContent = 'MK ' + (getFinalTotal() / 100).toFixed(2);
++        updateLoanRemaining();
++    }
++
++    document.getElementById('roundingSelect').addEventListener('change', updateRoundedTotalDisplay);
++
+     function togglePaymentMode(mode) {
+         document.getElementById('fullPaymentInfo').style.display = mode === 'full' ? 'block' : 'none';
+-        document.getElementById('discountFields').style.display = mode === 'discount' ? 'block' : 'none';
+-        document.getElementById('loanFields').style.display = mode === 'loan' ? 'block' : 'none';
+-
+-        if (mode === 'discount') {
+-            document.getElementById('discountAmount').addEventListener('input', updateDiscountedTotal);
+-            updateDiscountedTotal();
+-        } else {
+-            document.getElementById('discountAmount').removeEventListener('input', updateDiscountedTotal);
+-        }
++        document.getElementById('partialPaymentFields').style.display = mode === 'partial' ? 'block' : 'none';
+ 
+-        if (mode === 'loan') {
++        if (mode === 'partial') {
+             document.getElementById('loanAmount').addEventListener('input', updateLoanRemaining);
+             updateLoanRemaining();
+         } else {
+@@ -291,75 +216,125 @@ document.addEventListener('DOMContentLoaded', function() {
+         }
+     }
+ 
+-    function updateDiscountedTotal() {
+-        const discount = parseFloat(document.getElementById('discountAmount').value) || 0;
+-        const newTotal = Math.max(0, currentTotal / 100 - discount);
+-        document.getElementById('discountedTotalDisplay').textContent = 'MK ' + newTotal.toFixed(2);
+-    }
++    // Discount amount always live-updates the full-payment display
++    document.getElementById('discountAmount').addEventListener('input', function() {
++        document.getElementById('fullAmountDisplay').textContent = 'MK ' + (getFinalTotal() / 100).toFixed(2);
++        updateLoanRemaining();
++    });
+ 
+     function updateLoanRemaining() {
+         const paid = parseFloat(document.getElementById('loanAmount').value) || 0;
+-        const remaining = Math.max(0, currentTotal / 100 - paid);
++        const remaining = Math.max(0, getFinalTotal() / 100 - paid);
+         document.getElementById('loanRemainingDisplay').textContent = 'MK ' + remaining.toFixed(2);
+     }
+ 
+-    document.querySelectorAll('input[name="paymentMode"]').forEach(radio => {
++    document.querySelectorAll('input[name="payMode"]').forEach(radio => {
+         radio.addEventListener('change', function() {
+             togglePaymentMode(this.value);
+         });
+     });
+ 
+-    // Confirm Payment
++    // Payment Channel Logic for Reference Label
++    document.getElementById('paymentChannel').addEventListener('change', function() {
++        const val = this.value;
++        const refLabel = document.getElementById('refLabel');
++        const refInput = document.getElementById('paymentReference');
++        const refWrapper = document.getElementById('refFieldWrapper');
++        const medAidFields = document.getElementById('medicalAidFields');
++        
++        if (val === 'Airtel Money' || val === 'TNM Mpamba') {
++            refWrapper.style.display = 'block';
++            refLabel.textContent = 'Phone Number / Agent Code';
++            refInput.placeholder = 'e.g. 0991234567';
++            medAidFields.style.display = 'none';
++        } else if (val === 'Bank Transfer') {
++            refWrapper.style.display = 'block';
++            refLabel.textContent = 'Account Number';
++            refInput.placeholder = 'e.g. 1234567890';
++            medAidFields.style.display = 'none';
++        } else if (val === 'Cheque') {
++            refWrapper.style.display = 'block';
++            refLabel.textContent = 'Cheque Number';
++            refInput.placeholder = 'e.g. 001234';
++            medAidFields.style.display = 'none';
++        } else if (val === 'Medical Aid') {
++            refWrapper.style.display = 'none';
++            refInput.value = '';
++            medAidFields.style.display = 'block';
++        } else {
++            refWrapper.style.display = 'none';
++            refInput.value = '';
++            medAidFields.style.display = 'none';
++        }
++    });
++
++    // 1. Calculate the final total: round first, then apply discount
++    function getFinalTotal() {
++        const discountAmt = parseFloat(document.getElementById('discountAmount').value) * 100 || 0;
++        return Math.max(0, getRoundedBaseTotal() - discountAmt);
++    }
++
++    // 2. CONFIRM PAYMENT HANDLER (Re-written to avoid duplicate events)
+     document.getElementById('confirmPaymentBtn').addEventListener('click', function() {
+-        const mode = document.querySelector('input[name="paymentMode"]:checked').value;
+-        const payload = { payment_mode: mode };
++        const isFull = document.querySelector('input[name="payMode"]:checked').value === 'full';
++        const finalTotal = getFinalTotal();
++        
++        const discountAmt = parseFloat(document.getElementById('discountAmount').value) * 100 || 0;
++        const discountReason = document.getElementById('discountReason').value.trim();
+ 
+-        if (mode === 'discount') {
+-            const amount = parseFloat(document.getElementById('discountAmount').value) * 100;
+-            const reason = document.getElementById('discountReason').value.trim();
+-            
+-            if (!amount || amount <= 0) {
+-                alert('Please enter a valid discount amount.');
+-                return;
+-            }
+-            if (amount > currentTotal) {
+-                alert('Discount cannot exceed the total fee.');
+-                return;
+-            }
+-            if (!reason) {
+-                alert('Please enter a reason for the discount.');
+-                return;
+-            }
+-            payload.discount_amount = amount;
+-            payload.discount_reason = reason;
++        if (discountAmt > 0 && !discountReason) {
++            alert('Please enter a reason for the discount.');
++            return;
++        }
+ 
+-        } else if (mode === 'loan') {
+-            const amount = parseFloat(document.getElementById('loanAmount').value) * 100;
+-            const witness = document.getElementById('loanWitness').value.trim();
++        const roundTo = parseInt(document.getElementById('roundingSelect').value, 10) || 0;
++
++        const payload = { 
++            payment_mode: isFull ? 'full' : 'loan',
++            payment_channel: document.getElementById('paymentChannel').value,
++            payment_reference: document.getElementById('paymentReference').value.trim() || null,
++            medical_aid_company: document.getElementById('medicalAidCompany').value.trim() || null,
++            discount_amount: discountAmt,
++            discount_reason: discountReason || null,
++            round_to: roundTo || null,
++            rounded_total: roundTo ? getRoundedBaseTotal() : null
++        };
++
++        if (isFull) {
++            payload.amount_paid = finalTotal;
++        } else {
++            const amountPaid = parseFloat(document.getElementById('loanAmount').value) * 100 || 0;
++            const witness = document.getElementById('loanWitness').value;
+             const dueDate = document.getElementById('loanDueDate').value;
+ 
+-            if (!amount || amount <= 0) {
+-                alert('Please enter a valid payment amount.');
++            if (!amountPaid || amountPaid <= 0) {
++                alert('Please enter a valid payment amount for the loan.');
+                 return;
+             }
+-            if (amount >= currentTotal) {
+-                alert('Loan only applies to partial payments. Use Full Payment instead.');
++            if (amountPaid >= finalTotal) {
++                alert('If paying the full amount, please select "Pay Full Amount" instead.');
+                 return;
+             }
+             if (!witness) {
+-                alert('Witness name is required for loans.');
++                alert('Witness is required for partial payments/loans.');
+                 return;
+             }
+-            payload.amount_paid = amount;
+-            payload.witness_name = witness;
++            payload.amount_paid = amountPaid;
++            payload.witness_id = witness;
+             payload.loan_due_date = dueDate || null;
+         }
+ 
+-        // Disable button while processing
+         const btn = this;
+         btn.disabled = true;
+         btn.textContent = 'Processing...';
+ 
++        if (!currentVisitId) {
++            alert('Error: Visit ID is missing. Please refresh and try again.');
++            btn.disabled = false;
++            btn.textContent = '✅ Confirm & Complete';
++            return;
++        }
++
+         fetch('/cashier/process/' + currentVisitId, {
+             method: 'POST',
+             headers: { 'Content-Type': 'application/json' },
+@@ -368,7 +343,7 @@ document.addEventListener('DOMContentLoaded', function() {
+         .then(response => response.json())
+         .then(data => {
+             if (data.success) {
+-                paymentModal.hide();
++                document.getElementById('paymentModal').querySelector('.btn-close').click();
+                 location.reload();
+             } else {
+                 alert('Error: ' + (data.error || 'Failed to process payment.'));
+@@ -377,6 +352,7 @@ document.addEventListener('DOMContentLoaded', function() {
+             }
+         })
+         .catch(err => {
++            console.error(err);
+             alert('Network error. Please try again.');
+             btn.disabled = false;
+             btn.textContent = '✅ Confirm & Complete';
+@@ -389,81 +365,6 @@ document.addEventListener('DOMContentLoaded', function() {
+         btn.disabled = false;
+         btn.textContent = '✅ Confirm & Complete';
+     });
+-
+-    // --- View Invoice Logic ---
+-    
+-    const viewInvoiceModal = new bootstrap.Modal(document.getElementById('viewInvoiceModal'));
+-
+-    document.querySelectorAll('.view-invoice-btn').forEach(btn => {
+-        btn.addEventListener('click', function() {
+-            const visitId = this.dataset.id;
+-            const patientName = this.dataset.patient;
+-            
+-            document.getElementById('invPatientName').textContent = patientName;
+-            document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-muted">Loading...</td></tr>';
+-            viewInvoiceModal.show();
+-
+-            fetch('/cashier/view/' + visitId)
+-            .then(response => response.json())
+-            .then(data => {
+-                document.getElementById('invDiagnosis').textContent = data.diagnosis;
+-                document.getElementById('invTotal').textContent = 'MK ' + (data.total / 100).toFixed(2);
+-                
+-                let html = '';
+-                data.items.forEach(item => {
+-                    html += `
+-                        <tr>
+-                            <td><span class="badge bg-info text-dark">${item.type}</span></td>
+-                            <td><strong>${item.name}</strong></td>
+-                            <td class="text-end">MK ${(item.unit_price / 100).toFixed(2)}</td>
+-                            <td class="text-end">${item.qty}</td>
+-                            <td class="text-end">MK ${(item.total / 100).toFixed(2)}</td>
+-                        </tr>
+-                    `;
+-                });
+-                document.getElementById('invoiceItemsBody').innerHTML = html;
+-            })
+-            .catch(() => {
+-                document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-danger">Error loading invoice.</td></tr>';
+-            });
+-        });
+-    });
+-
+-    // --- Print Invoice Logic ---
+-    document.getElementById('printInvoiceBtn').addEventListener('click', function() {
+-        // Get the content of the modal body
+-        const invoiceContent = document.querySelector('#viewInvoiceModal .modal-body').innerHTML;
+-        
+-        // Open a new blank window
+-        const printWindow = window.open('', '_blank', 'width=800,height=600');
+-        
+-        // Write the HTML structure for the print view
+-        printWindow.document.write(`
+-            <html>
+-                <head>
+-                    <title>Invoice</title>
+-                    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+-                    <style>
+-                        body { padding: 20px; font-family: Arial, sans-serif; }
+-                        .table { width: 100%; margin-bottom: 1rem; }
+-                        @media print {
+-                            body { -webkit-print-color-adjust: exact; }
+-                        }
+-                    </style>
+-                </head>
+-                <body>
+-                    <h2 class="text-center mb-4">🏥 ClinicManager Invoice</h2>
+-                    ${invoiceContent}
+-                    <p class="text-center text-muted mt-4">Thank you for visiting!</p>
+-                    <script>
+-                        // Automatically trigger print after page loads
+-                        window.onload = function() { window.print(); window.close(); };
+-                    <\/script>
+-                </body>
+-            </html>
+-        `);
+-        printWindow.document.close();
+-    });
+ });
+ </script>
+ {% endblock %}
+\ No newline at end of file
+diff --git a/templates/retail.html b/templates/retail.html
+index c63ed4a..89774b3 100644
+--- a/templates/retail.html
++++ b/templates/retail.html
+@@ -18,8 +18,8 @@
+                             <option value="">-- Select an item --</option>
+                             {% for item in items %}
+                             <option value="{{ item[0] }}" data-price="{{ item[3] }}" data-pack="{{ item[4] }}" data-name="{{ item[1] }}" data-type="{{ item[2] }}">
+-    {{ item[1] }} ({{ item[2] }}) - MK {{ "%.2f"|format(item[3] / 100) }} - {{ item[4] }} units
+-</option>
++                                {{ item[1] }} ({{ item[2] }}) - MK {{ "%.2f"|format(item[3] / 100) }} - {{ item[4] }} units
++                            </option>
+                             {% endfor %}
+                         </select>
+                     </div>
+@@ -65,29 +65,23 @@
+                     </table>
+                 </div>
+ 
+-                <form action="/retail" method="POST" id="checkoutForm" class="mt-3">
+-                    <div class="row">
+-                        <div class="col-md-6 offset-md-6">
+-                            <div class="mb-3">
+-                                <label class="form-label fw-bold">Amount Paid (MK)</label>
+-                                <input type="number" step="0.01" name="amount_paid" id="amountPaidInput" class="form-control" placeholder="e.g. 500.00" required>
+-                            </div>
+-                        </div>
+-                    </div>
+-                    <input type="hidden" name="cart_data" id="cartDataInput">
+-                    <div class="d-flex justify-content-end">
+-                        <button type="submit" class="btn btn-success px-4">✅ Complete Sale</button>
+-                    </div>
+-                </form>
++                <div class="mt-3 text-end">
++                    <!-- Proceed to Payment triggers the unified modal -->
++                    <button class="btn btn-success px-4" id="proceedToPaymentBtn" disabled>💳 Proceed to Payment</button>
++                </div>
+             </div>
+         </div>
+     </div>
+ </div>
+ 
++{% include 'payment_modal.html' %}
++
+ <script>
+ document.addEventListener('DOMContentLoaded', function() {
+     // Track items in the shopping cart
+     const cart = [];
++    let retailVisitId = null;
++    let retailTotal = 0;
+ 
+     // Helper: Format money
+     function formatMK(tambala) {
+@@ -99,19 +93,21 @@ document.addEventListener('DOMContentLoaded', function() {
+         const tbody = document.getElementById('cartBody');
+         const emptyRow = document.getElementById('emptyCartRow');
+         const grandTotalEl = document.getElementById('grandTotal');
++        const proceedBtn = document.getElementById('proceedToPaymentBtn');
+ 
+         tbody.innerHTML = '';
+ 
+         if (cart.length === 0) {
+             tbody.appendChild(emptyRow);
+             grandTotalEl.textContent = 'MK 0.00';
++            proceedBtn.disabled = true;
++            retailTotal = 0;
+             return;
+         }
+ 
+         let grandTotal = 0;
+ 
+         cart.forEach((item, index) => {
+-            // Convert pack price to per-unit price
+             const packQty = item.packQty > 0 ? item.packQty : 1;
+             const unitPrice = item.price / packQty;
+             const lineTotal = Math.round(unitPrice * item.qty);
+@@ -131,6 +127,8 @@ document.addEventListener('DOMContentLoaded', function() {
+         });
+ 
+         grandTotalEl.textContent = formatMK(grandTotal);
++        retailTotal = grandTotal;
++        proceedBtn.disabled = false;
+     }
+ 
+     // Add item to cart
+@@ -173,16 +171,268 @@ document.addEventListener('DOMContentLoaded', function() {
+         }
+     });
+ 
+-    // Submit the cart
+-    document.getElementById('checkoutForm').addEventListener('submit', function(e) {
+-        if (cart.length === 0) {
+-            e.preventDefault();
+-            alert('Cannot complete an empty sale. Please add at least one item.');
++    // --- Unified Payment Modal Logic for Retail ---
++    const paymentModal = new bootstrap.Modal(document.getElementById('paymentModal'));
++
++    // Populate Staff Witness Dropdown
++    fetch('/api/staff/list')
++        .then(res => res.json())
++        .then(data => {
++            const select = document.getElementById('loanWitness');
++            select.innerHTML = '<option value="">-- Select a staff member --</option>';
++            data.staff.forEach(s => {
++                const opt = document.createElement('option');
++                opt.value = s.id;
++                opt.textContent = s.name;
++                select.appendChild(opt);
++            });
++        });
++
++    document.getElementById('proceedToPaymentBtn').addEventListener('click', function() {
++        // Create a temporary retail visit to get an ID
++        fetch('/retail/create_draft', {
++            method: 'POST',
++            headers: { 'Content-Type': 'application/json' },
++            body: JSON.stringify({ cart: cart })
++        })
++        .then(res => res.json())
++        .then(data => {
++            if (data.success) {
++                retailVisitId = data.visit_id;
++                
++                // Populate Modal
++                document.getElementById('modalPatientName').textContent = '🏪 Retail Sale';
++                document.getElementById('modalTotalFee').textContent = formatMK(retailTotal);
++                document.getElementById('fullAmountDisplay').textContent = formatMK(retailTotal);
++                
++                // Reset form
++                document.getElementById('discountAmount').value = '';
++                document.getElementById('discountReason').value = '';
++                document.getElementById('loanAmount').value = '';
++                document.getElementById('loanWitness').value = '';
++                document.getElementById('loanDueDate').value = '';
++                document.getElementById('paymentReference').value = '';
++                document.getElementById('paymentChannel').value = 'Cash';
++                document.getElementById('medicalAidCompany').value = '';
++                document.getElementById('medicalAidFields').style.display = 'none';
++                document.getElementById('refFieldWrapper').style.display = 'none';
++                document.getElementById('roundingSelect').value = '0';
++                updateRoundedTotalDisplay();
++
++                // Reset Payment Mode
++                document.getElementById('payFull').checked = true;
++                togglePaymentMode('full');
++
++                // Load Invoice Items
++                document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-muted">Loading items...</td></tr>';
++                paymentModal.show();
++
++                // Build invoice HTML from cart
++                let html = '';
++                cart.forEach(item => {
++                    const packQty = item.packQty > 0 ? item.packQty : 1;
++                    const unitPrice = item.price / packQty;
++                    const lineTotal = Math.round(unitPrice * item.qty);
++                    html += `
++                        <tr>
++                            <td><span class="badge bg-info text-dark">${item.type}</span></td>
++                            <td><strong>${item.name}</strong></td>
++                            <td class="text-end">${formatMK(unitPrice)}</td>
++                            <td class="text-end">${item.qty}</td>
++                            <td class="text-end">${formatMK(lineTotal)}</td>
++                        </tr>
++                    `;
++                });
++                document.getElementById('invoiceItemsBody').innerHTML = html;
++                document.getElementById('invTotal').textContent = formatMK(retailTotal);
++            } else {
++                alert('Error: ' + data.error);
++            }
++        })
++        .catch(err => {
++            console.error(err);
++            alert('Network error. Could not create sale.');
++        });
++    });
++
++    // Rounds retailTotal (the raw sale total, in tambala) to the nearest
++    // selected MK value. "0" means no rounding.
++    function getRoundedBaseTotal() {
++        const roundTo = parseInt(document.getElementById('roundingSelect').value, 10) || 0;
++        if (roundTo <= 0) return retailTotal;
++        const roundToTambala = roundTo * 100;
++        return Math.round(retailTotal / roundToTambala) * roundToTambala;
++    }
++
++    function updateRoundedTotalDisplay() {
++        const rounded = getRoundedBaseTotal();
++        document.getElementById('roundedTotalDisplay').value = 'MK ' + (rounded / 100).toFixed(2);
++        document.getElementById('modalTotalFee').textContent = 'MK ' + (rounded / 100).toFixed(2);
++        document.getElementById('fullAmountDisplay').textContent = 'MK ' + (getFinalTotal() / 100).toFixed(2);
++        updateLoanRemaining();
++    }
++
++    document.getElementById('roundingSelect').addEventListener('change', updateRoundedTotalDisplay);
++
++    function togglePaymentMode(mode) {
++        document.getElementById('fullPaymentInfo').style.display = mode === 'full' ? 'block' : 'none';
++        document.getElementById('partialPaymentFields').style.display = mode === 'partial' ? 'block' : 'none';
++
++        if (mode === 'partial') {
++            document.getElementById('loanAmount').addEventListener('input', updateLoanRemaining);
++            updateLoanRemaining();
++        } else {
++            document.getElementById('loanAmount').removeEventListener('input', updateLoanRemaining);
++        }
++    }
++
++    // Discount amount always live-updates the full-payment display
++    document.getElementById('discountAmount').addEventListener('input', function() {
++        document.getElementById('fullAmountDisplay').textContent = 'MK ' + (getFinalTotal() / 100).toFixed(2);
++        updateLoanRemaining();
++    });
++
++    function updateLoanRemaining() {
++        const paid = parseFloat(document.getElementById('loanAmount').value) || 0;
++        const remaining = Math.max(0, getFinalTotal() / 100 - paid);
++        document.getElementById('loanRemainingDisplay').textContent = 'MK ' + remaining.toFixed(2);
++    }
++
++    document.querySelectorAll('input[name="payMode"]').forEach(radio => {
++        radio.addEventListener('change', function() {
++            togglePaymentMode(this.value);
++        });
++    });
++
++    // Payment Channel Logic
++    document.getElementById('paymentChannel').addEventListener('change', function() {
++        const val = this.value;
++        const refLabel = document.getElementById('refLabel');
++        const refInput = document.getElementById('paymentReference');
++        const refWrapper = document.getElementById('refFieldWrapper');
++        const medAidFields = document.getElementById('medicalAidFields');
++        
++        if (val === 'Airtel Money' || val === 'TNM Mpamba') {
++            refWrapper.style.display = 'block';
++            refLabel.textContent = 'Phone Number / Agent Code';
++            refInput.placeholder = 'e.g. 0991234567';
++            medAidFields.style.display = 'none';
++        } else if (val === 'Bank Transfer') {
++            refWrapper.style.display = 'block';
++            refLabel.textContent = 'Account Number';
++            refInput.placeholder = 'e.g. 1234567890';
++            medAidFields.style.display = 'none';
++        } else if (val === 'Cheque') {
++            refWrapper.style.display = 'block';
++            refLabel.textContent = 'Cheque Number';
++            refInput.placeholder = 'e.g. 001234';
++            medAidFields.style.display = 'none';
++        } else if (val === 'Medical Aid') {
++            refWrapper.style.display = 'none';
++            refInput.value = '';
++            medAidFields.style.display = 'block';
++        } else {
++            refWrapper.style.display = 'none';
++            refInput.value = '';
++            medAidFields.style.display = 'none';
++        }
++    });
++
++    // 1. Calculate the final total: round first, then apply discount
++    function getFinalTotal() {
++        const discountAmt = parseFloat(document.getElementById('discountAmount').value) * 100 || 0;
++        return Math.max(0, getRoundedBaseTotal() - discountAmt);
++    }
++
++    // 2. CONFIRM PAYMENT HANDLER (Re-written to avoid duplicate events)
++    document.getElementById('confirmPaymentBtn').addEventListener('click', function() {
++        const isFull = document.querySelector('input[name="payMode"]:checked').value === 'full';
++        const finalTotal = getFinalTotal();
++        
++        const discountAmt = parseFloat(document.getElementById('discountAmount').value) * 100 || 0;
++        const discountReason = document.getElementById('discountReason').value.trim();
++
++        if (discountAmt > 0 && !discountReason) {
++            alert('Please enter a reason for the discount.');
+             return;
+         }
+ 
+-        // Pack the cart data into a hidden input
+-        document.getElementById('cartDataInput').value = JSON.stringify(cart);
++        const roundTo = parseInt(document.getElementById('roundingSelect').value, 10) || 0;
++
++        const payload = { 
++            payment_mode: isFull ? 'full' : 'loan',
++            payment_channel: document.getElementById('paymentChannel').value,
++            payment_reference: document.getElementById('paymentReference').value.trim() || null,
++            medical_aid_company: document.getElementById('medicalAidCompany').value.trim() || null,
++            discount_amount: discountAmt,
++            discount_reason: discountReason || null,
++            round_to: roundTo || null,
++            rounded_total: roundTo ? getRoundedBaseTotal() : null
++        };
++
++        if (isFull) {
++            payload.amount_paid = finalTotal;
++        } else {
++            const amountPaid = parseFloat(document.getElementById('loanAmount').value) * 100 || 0;
++            const witness = document.getElementById('loanWitness').value;
++            const dueDate = document.getElementById('loanDueDate').value;
++
++            if (!amountPaid || amountPaid <= 0) {
++                alert('Please enter a valid payment amount for the loan.');
++                return;
++            }
++            if (amountPaid >= finalTotal) {
++                alert('If paying the full amount, please select "Pay Full Amount" instead.');
++                return;
++            }
++            if (!witness) {
++                alert('Witness is required for partial payments/loans.');
++                return;
++            }
++            payload.amount_paid = amountPaid;
++            payload.witness_id = witness;
++            payload.loan_due_date = dueDate || null;
++        }
++
++        const btn = this;
++        btn.disabled = true;
++        btn.textContent = 'Processing...';
++
++        if (!retailVisitId) {
++            alert('Error: Visit ID is missing. Please add items and try again.');
++            btn.disabled = false;
++            btn.textContent = '✅ Confirm & Complete';
++            return;
++        }
++
++        fetch('/cashier/process/' + retailVisitId, {
++            method: 'POST',
++            headers: { 'Content-Type': 'application/json' },
++            body: JSON.stringify(payload)
++        })
++        .then(response => response.json())
++        .then(data => {
++            if (data.success) {
++                document.getElementById('paymentModal').querySelector('.btn-close').click();
++                location.reload();
++            } else {
++                alert('Error: ' + (data.error || 'Failed to process payment.'));
++                btn.disabled = false;
++                btn.textContent = '✅ Confirm & Complete';
++            }
++        })
++        .catch(err => {
++            console.error(err);
++            alert('Network error. Please try again.');
++            btn.disabled = false;
++            btn.textContent = '✅ Confirm & Complete';
++        });
++    });
++
++    document.getElementById('paymentModal').addEventListener('hidden.bs.modal', function() {
++        const btn = document.getElementById('confirmPaymentBtn');
++        btn.disabled = false;
++        btn.textContent = '✅ Confirm & Complete';
+     });
+ });
+ </script>
+diff --git a/templates/visit.html b/templates/visit.html
+index 1361f49..bee9c82 100644
+--- a/templates/visit.html
++++ b/templates/visit.html
+@@ -163,11 +163,7 @@ document.addEventListener('DOMContentLoaded', function () {
+ 
+             // Items with no stock concept (Procedures, Consultation) have
+             // no real ceiling -- only cap the input when there's an
+-            // actual usableQty to respect. The max attribute alone is a
+-            // soft hint (some mobile keyboards/browsers don't enforce it
+-            // strictly while typing), so the input/blur handlers below
+-            // also clamp and warn explicitly -- this is the client-side
+-            // half; the real enforcement is server-side on submit.
++            // actual usableQty to respect.
+             const maxAttr = item.noStockConcept ? '' : `max="${item.usableQty}"`;
+ 
+             tr.innerHTML = `
+@@ -191,13 +187,6 @@ document.addEventListener('DOMContentLoaded', function () {
+         grandTotalEl.textContent = formatMK(grandTotal);
+ 
+         // Wire up qty changes and remove buttons for the rows just rendered.
+-        //
+-        // IMPORTANT: typing in the qty box must NOT call renderSelectedTable()
+-        // on every keystroke -- that destroys and recreates this exact input
+-        // element, which steals focus and dismisses the mobile keyboard mid-type.
+-        // Instead, just update this row's line-total and the grand total in
+-        // place, and only validate/clamp the value once the person is done
+-        // editing (on blur), not while they're actively typing or deleting.
+         selectedBody.querySelectorAll('.qty-input').forEach(input => {
+             input.addEventListener('input', function () {
+                 const id = this.getAttribute('data-id');
+@@ -211,12 +200,6 @@ document.addEventListener('DOMContentLoaded', function () {
+                 const limit = entry.item.usableQty;
+ 
+                 if (!isNaN(raw) && raw >= 1) {
+-                    // Valid positive number -- commit it as the real
+-                    // quantity and show its true line total, regardless
+-                    // of whether it's over the limit. We still let them
+-                    // see the total update live; the warning (below) is
+-                    // what tells them it won't be accepted as-is, and
+-                    // blur will clamp it back down once they're done.
+                     entry.qty = raw;
+                     const lineTotal = calculateLineTotal(entry.item, entry.qty);
+                     row.querySelector('.line-total').textContent = formatMK(lineTotal);
+@@ -229,13 +212,6 @@ document.addEventListener('DOMContentLoaded', function () {
+                         warningEl.style.display = 'none';
+                     }
+                 } else {
+-                    // Empty, 0, negative, or non-numeric: this can NEVER
+-                    // be committed or submitted (entry.qty is left
+-                    // untouched, and blur below will clamp it back up to
+-                    // 1) -- but the line total should still visibly show
+-                    // MK 0.00 right now rather than a stale leftover
+-                    // total, so what's on screen matches what's actually
+-                    // typed.
+                     row.querySelector('.line-total').textContent = formatMK(0);
+                     warningEl.style.display = 'none';
+                 }
+@@ -246,14 +222,6 @@ document.addEventListener('DOMContentLoaded', function () {
+                 const entry = selected.get(id);
+                 if (!entry) return;
+ 
+-                // Now that editing is finished, clamp anything invalid,
+-                // empty, or over-the-available-limit back to a sane
+-                // value, then do a full re-render to keep everything in
+-                // sync. Clamping down to the limit here (rather than
+-                // leaving an over-limit number sitting in the box) keeps
+-                // what's on screen always submittable -- the doctor can
+-                // still raise it again right up to the real limit if
+-                // more stock comes in before they hit Save.
+                 let qty = parseInt(this.value, 10);
+                 if (isNaN(qty) || qty < 1) qty = 1;
+                 if (!entry.item.noStockConcept && qty > entry.item.usableQty) {
+@@ -274,16 +242,10 @@ document.addEventListener('DOMContentLoaded', function () {
+     }
+ 
+     function addItem(item) {
+-        if (!isSelectable(item)) return; // safety net; UI already prevents this
++        if (!isSelectable(item)) return;
+         if (selected.has(item.id)) {
+-            // Already added -- just bump quantity by 1 instead of duplicating
+             selected.get(item.id).qty += 1;
+         } else {
+-            // Default to this item's "Quantity in Pack" from the price
+-            // list (e.g. a syrup priced per bottle of 100ml might default
+-            // to 1, but a price entry covering a strip of 10 tablets
+-            // might default to 10) rather than always starting at 1.
+-            // Guard against a missing/non-positive default just in case.
+             const startingQty = (item.defaultQuantity && item.defaultQuantity >= 1) ? item.defaultQuantity : 1;
+             selected.set(item.id, { item: item, qty: startingQty });
+         }
+@@ -352,13 +314,6 @@ document.addEventListener('DOMContentLoaded', function () {
+             return;
+         }
+ 
+-        // Don't rely solely on the blur handler having already fixed up
+-        // every quantity field -- if someone taps Save while a field is
+-        // still showing 0, empty, or something invalid (without that
+-        // field ever losing focus first), catch it here too. This reads
+-        // the live DOM value directly rather than trusting `selected`,
+-        // since `selected` may still hold a stale committed value if the
+-        // person never typed anything valid for this row at all.
+         const qtyInputs = document.querySelectorAll('.qty-input');
+         for (const input of qtyInputs) {
+             const qty = parseInt(input.value, 10);
+diff --git a/templates/payment_modal.html b/templates/payment_modal.html
+new file mode 100644
+index 0000000..53e1e3f
+--- /dev/null
++++ b/templates/payment_modal.html
+@@ -0,0 +1,159 @@
++<!-- payment_modal.html -->
++<!-- This file is included by both cashier.html and retail.html -->
++<div class="modal fade" id="paymentModal" tabindex="-1">
++    <div class="modal-dialog modal-lg">
++        <div class="modal-content">
++            <div class="modal-header bg-dark text-white">
++                <h5 class="modal-title">💳 Process Payment</h5>
++                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
++            </div>
++            <div class="modal-body">
++                <div id="modalPatientInfo" class="mb-3">
++                    <h6 id="modalPatientName" class="mb-0"></h6>
++                    <small class="text-muted">Total: <span id="modalTotalFee">MK 0.00</span></small>
++                </div>
++
++                <!-- Invoice Items Table -->
++                <div class="table-responsive mb-3">
++                    <table class="table table-sm table-bordered">
++                        <thead class="table-light">
++                            <tr>
++                                <th>Type</th>
++                                <th>Item</th>
++                                <th class="text-end">Unit Price</th>
++                                <th class="text-end">Qty</th>
++                                <th class="text-end">Total</th>
++                            </tr>
++                        </thead>
++                        <tbody id="invoiceItemsBody">
++                            <tr><td colspan="5" class="text-center text-muted">Loading items...</td></tr>
++                        </tbody>
++                        <tfoot>
++                            <tr>
++                                <th colspan="4" class="text-end">Grand Total</th>
++                                <th class="text-end" id="invTotal">MK 0.00</th>
++                            </tr>
++                        </tfoot>
++                    </table>
++                </div>
++
++                <hr>
++
++                <!-- ROUNDING (Optional, owner/cashier convenience) -->
++                <div class="row mb-3">
++                    <div class="col-md-6">
++                        <label class="form-label fw-bold">Round Total To Nearest (MK)</label>
++                        <select id="roundingSelect" class="form-select">
++                            <option value="0" selected>No rounding</option>
++                            <option value="100">100</option>
++                            <option value="200">200</option>
++                            <option value="300">300</option>
++                            <option value="400">400</option>
++                            <option value="500">500</option>
++                            <option value="600">600</option>
++                            <option value="700">700</option>
++                            <option value="800">800</option>
++                            <option value="900">900</option>
++                            <option value="1000">1000</option>
++                        </select>
++                        <small class="text-muted">Rounds the total (after discount) to the nearest selected value, e.g. avoids decimals like MK 1,234.50.</small>
++                    </div>
++                    <div class="col-md-6">
++                        <label class="form-label fw-bold">Rounded Total</label>
++                        <input type="text" id="roundedTotalDisplay" class="form-control" value="MK 0.00" readonly>
++                    </div>
++                </div>
++
++                <hr>
++                
++                <!-- STEP 1: DISCOUNT (Optional) -->
++                <div class="row mb-3">
++                    <div class="col-md-6">
++                        <label class="form-label fw-bold">Discount Amount (MK)</label>
++                        <div class="input-group">
++                            <input type="number" step="0.01" id="discountAmount" class="form-control" placeholder="0.00" min="0">
++                            <button class="btn btn-outline-danger" type="button" id="clearDiscountBtn">✕</button>
++                        </div>
++                        <small class="text-muted">Enter a discount to reduce the total, or leave at 0.</small>
++                    </div>
++                    <div class="col-md-6">
++                        <label class="form-label fw-bold">Discount Reason <span class="text-danger">*</span></label>
++                        <input type="text" id="discountReason" class="form-control" placeholder="e.g. Staff discount">
++                    </div>
++                </div>
++
++                <hr>
++
++                <!-- STEP 2: AMOUNT TO PAY NOW -->
++                <div class="mb-3">
++                    <label class="form-label fw-bold">How much is the patient paying <strong>now</strong>?</label>
++                    <div class="btn-group w-100 mb-2" role="group">
++                        <input type="radio" class="btn-check" name="payMode" id="payFull" value="full" checked>
++                        <label class="btn btn-outline-success" for="payFull">💰 Pay Full Amount</label>
++                        
++                        <input type="radio" class="btn-check" name="payMode" id="payPartial" value="partial">
++                        <label class="btn btn-outline-warning" for="payPartial">💳 Pay Partial / Loan</label>
++                    </div>
++                </div>
++
++                <!-- Full Payment Info -->
++                <div id="fullPaymentInfo" class="alert alert-success">
++                    <p class="mb-0">The patient will pay the full remaining amount: <strong id="fullAmountDisplay">MK 0.00</strong></p>
++                </div>
++
++                <!-- Partial Payment / Loan Fields -->
++                <div id="partialPaymentFields" style="display: none;">
++                    <div class="mb-3">
++                        <label class="form-label fw-bold">Amount Paid Now (MK) <span class="text-danger">*</span></label>
++                        <input type="number" step="0.01" id="loanAmount" class="form-control" placeholder="e.g. 1500.00" min="0">
++                        <small class="text-muted">Remaining balance: <span id="loanRemainingDisplay">MK 0.00</span></small>
++                    </div>
++                    <div class="mb-3">
++                        <label class="form-label fw-bold">Witness <span class="text-danger">*</span></label>
++                        <select id="loanWitness" class="form-select">
++                            <option value="">-- Select a staff member --</option>
++                        </select>
++                    </div>
++                    <div class="mb-3">
++                        <label class="form-label fw-bold">Due Date (Optional)</label>
++                        <input type="date" id="loanDueDate" class="form-control">
++                    </div>
++                </div>
++
++                <hr>
++
++                <!-- Payment Channel -->
++                <div class="row mb-3">
++                    <div class="col-md-6">
++                        <label class="form-label fw-bold">Payment Channel</label>
++                        <select id="paymentChannel" class="form-select">
++                            <option value="Cash">Cash</option>
++                            <option value="Airtel Money">Airtel Money</option>
++                            <option value="TNM Mpamba">TNM Mpamba</option>
++                            <option value="Bank Transfer">Bank Transfer</option>
++                            <option value="Cheque">Cheque</option>
++                            <option value="Medical Aid">Medical Aid</option>
++                        </select>
++                    </div>
++                    <div class="col-md-6" id="refFieldWrapper" style="display: none;">
++                        <label class="form-label fw-bold" id="refLabel">Reference / Phone Number</label>
++                        <input type="text" id="paymentReference" class="form-control" placeholder="Enter account/phone number">
++                    </div>
++                </div>
++
++                <!-- Medical Aid Field (Hidden by default) -->
++                <div id="medicalAidFields" style="display: none;" class="row mb-3">
++                    <div class="col-md-12">
++                        <label class="form-label fw-bold">Medical Aid Company</label>
++                        <input type="text" id="medicalAidCompany" class="form-control" placeholder="e.g. MASM, NICO">
++                    </div>
++                </div>
++
++            </div>
++            <div class="modal-footer">
++                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
++                <button type="button" class="btn btn-success" id="confirmPaymentBtn">✅ Confirm & Complete</button>
++            </div>
++        </div>
++    </div>
++</div>
+\ No newline at end of file

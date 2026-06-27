@@ -50,14 +50,6 @@
                             {% endif %}
                         </td>
                         <td class="text-end">
-                            <!-- VIEW INVOICE BUTTON (Visible to everyone) -->
-                            <button class="btn btn-outline-secondary btn-sm view-invoice-btn me-1"
-                                    data-id="{{ visit[0] }}"
-                                    data-patient="{{ visit[11] }}"
-                                    style="font-size: 0.75rem;">
-                                📄 View
-                            </button>
-
                             {% if visit[7] == 'Loan Active' %}
                                 <a href="/cashier/loan/{{ visit[0] }}" class="btn btn-outline-info btn-sm">
                                     📋 Loan
@@ -68,10 +60,7 @@
                                         data-total="{{ visit[4] }}"
                                         data-paid="{{ visit[5] }}"
                                         data-status="{{ visit[7] }}"
-                                        data-patient="{{ visit[11] }}"
-                                        data-discount-amount="{{ visit[8] or 0 }}"
-                                        data-discount-reason="{{ visit[9] or '' }}"
-                                        data-loan-due="{{ visit[10] or '' }}">
+                                        data-patient="{{ visit[11] }}">
                                     💳 Process
                                 </button>
                             {% endif %}
@@ -88,124 +77,8 @@
     </div>
 </div>
 
-<!-- Payment Processing Modal -->
-<div class="modal fade" id="paymentModal" tabindex="-1">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header bg-dark text-white">
-                <h5 class="modal-title">💳 Process Payment</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div id="modalPatientInfo" class="mb-3">
-                    <h6 id="modalPatientName" class="mb-0"></h6>
-                    <small class="text-muted">Total: <span id="modalTotalFee">MK 0.00</span></small>
-                </div>
+{% include 'payment_modal.html' %}
 
-                <div class="mb-3">
-                    <label class="form-label fw-bold">Payment Mode</label>
-                    <div class="btn-group w-100" role="group">
-                        <input type="radio" class="btn-check" name="paymentMode" id="modeFull" value="full" checked>
-                        <label class="btn btn-outline-success" for="modeFull">✅ Full Payment</label>
-                        
-                        <input type="radio" class="btn-check" name="paymentMode" id="modeDiscount" value="discount">
-                        <label class="btn btn-outline-primary" for="modeDiscount">🏷️ Discount</label>
-                        
-                        <input type="radio" class="btn-check" name="paymentMode" id="modeLoan" value="loan">
-                        <label class="btn btn-outline-warning" for="modeLoan">📋 Loan</label>
-                    </div>
-                </div>
-
-                <!-- Full Payment: no extra fields -->
-                <div id="fullPaymentInfo" class="alert alert-success">
-                    <p class="mb-0">The patient will pay the full amount: <strong id="fullAmountDisplay">MK 0.00</strong></p>
-                </div>
-
-                <!-- Discount: amount + reason -->
-                <div id="discountFields" style="display: none;">
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Discount Amount (MK)</label>
-                        <input type="number" step="0.01" id="discountAmount" class="form-control" placeholder="e.g. 500.00" min="0">
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Discount Reason <span class="text-danger">*</span></label>
-                        <input type="text" id="discountReason" class="form-control" placeholder="e.g. Staff discount, hardship case, etc.">
-                    </div>
-                    <div class="alert alert-info">
-                        <strong>New total:</strong> <span id="discountedTotalDisplay">MK 0.00</span>
-                    </div>
-                </div>
-
-                <!-- Loan: amount paid + witness + due date -->
-                <div id="loanFields" style="display: none;">
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Amount Paid Now (MK) <span class="text-danger">*</span></label>
-                        <input type="number" step="0.01" id="loanAmount" class="form-control" placeholder="e.g. 1500.00" min="0">
-                        <small class="text-muted">Remaining balance: <span id="loanRemainingDisplay">MK 0.00</span></small>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Witness Name <span class="text-danger">*</span></label>
-                        <input type="text" id="loanWitness" class="form-control" placeholder="Full name of witness">
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Due Date (Optional)</label>
-                        <input type="date" id="loanDueDate" class="form-control">
-                    </div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-success" id="confirmPaymentBtn">✅ Confirm & Complete</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- View Invoice Modal -->
-<div class="modal fade" id="viewInvoiceModal" tabindex="-1">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header bg-secondary text-white">
-                <h5 class="modal-title">📄 Invoice Details</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="mb-3">
-                    <h6 id="invPatientName" class="mb-0"></h6>
-                    <small class="text-muted">Diagnosis: <span id="invDiagnosis"></span></small>
-                </div>
-                <div class="table-responsive">
-                    <table class="table table-sm table-bordered">
-                        <thead class="table-light">
-                            <tr>
-                                <th>Type</th>
-                                <th>Item</th>
-                                <th class="text-end">Unit Price</th>
-                                <th class="text-end">Qty</th>
-                                <th class="text-end">Total</th>
-                            </tr>
-                        </thead>
-                        <tbody id="invoiceItemsBody">
-                            <tr><td colspan="5" class="text-center text-muted">Loading...</td></tr>
-                        </tbody>
-                        <tfoot>
-                            <tr>
-                                <th colspan="4" class="text-end">Grand Total</th>
-                                <th class="text-end" id="invTotal">MK 0.00</th>
-                            </tr>
-                        </tfoot>
-                    </table>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                <button type="button" class="btn btn-primary" id="printInvoiceBtn">🖨️ Print Invoice</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- JavaScript -->
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     // Search functionality
@@ -226,23 +99,32 @@ document.addEventListener('DOMContentLoaded', function() {
         noResultsMsg.style.display = (visibleCount === 0 && query.length > 0) ? 'block' : 'none';
     });
 
-    // Payment Modal Logic
+    // --- Unified Payment Modal Logic ---
     const paymentModal = new bootstrap.Modal(document.getElementById('paymentModal'));
     let currentVisitId = null;
     let currentTotal = 0;
-    let currentPaid = 0;
-    let currentStatus = '';
+
+    // Populate Staff Witness Dropdown
+    fetch('/api/staff/list')
+        .then(res => res.json())
+        .then(data => {
+            const select = document.getElementById('loanWitness');
+            select.innerHTML = '<option value="">-- Select a staff member --</option>';
+            data.staff.forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s.id;
+                opt.textContent = s.name;
+                select.appendChild(opt);
+            });
+        });
 
     document.querySelectorAll('.process-payment-btn').forEach(btn => {
         btn.addEventListener('click', function() {
             currentVisitId = this.getAttribute('data-id');
             currentTotal = parseInt(this.getAttribute('data-total'));
-            currentPaid = parseInt(this.getAttribute('data-paid'));
-            currentStatus = this.getAttribute('data-status');
+            const currentPaid = parseInt(this.getAttribute('data-paid'));
+            const currentStatus = this.getAttribute('data-status');
             const patientName = this.getAttribute('data-patient');
-            const discountAmount = parseInt(this.getAttribute('data-discount-amount')) || 0;
-            const discountReason = this.getAttribute('data-discount-reason');
-            const loanDue = this.getAttribute('data-loan-due');
 
             document.getElementById('modalPatientName').textContent = patientName;
             document.getElementById('modalTotalFee').textContent = 'MK ' + (currentTotal / 100).toFixed(2);
@@ -253,162 +135,34 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('discountReason').value = '';
             document.getElementById('loanAmount').value = '';
             document.getElementById('loanWitness').value = '';
-            document.getElementById('loanDueDate').value = loanDue || '';
-            
-            // Reset to Full Payment mode
-            document.getElementById('modeFull').checked = true;
+            document.getElementById('loanDueDate').value = '';
+            document.getElementById('paymentReference').value = '';
+            document.getElementById('paymentChannel').value = 'Cash';
+            document.getElementById('medicalAidCompany').value = '';
+            document.getElementById('medicalAidFields').style.display = 'none';
+            document.getElementById('refFieldWrapper').style.display = 'none';
+            document.getElementById('roundingSelect').value = '0';
+            updateRoundedTotalDisplay();
+
+            // Reset Payment Mode
+            document.getElementById('payFull').checked = true;
             togglePaymentMode('full');
 
-            // If it's already a loan, default to Loan mode
+            // If it's already a loan, default to Partial mode
             if (currentStatus === 'Loan Active') {
-                document.getElementById('modeLoan').checked = true;
-                togglePaymentMode('loan');
+                document.getElementById('payPartial').checked = true;
+                togglePaymentMode('partial');
                 document.getElementById('loanAmount').value = ((currentTotal - currentPaid) / 100).toFixed(2);
                 updateLoanRemaining();
             }
 
+            // Load Invoice Items
+            document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-muted">Loading items...</td></tr>';
             paymentModal.show();
-        });
-    });
 
-    function togglePaymentMode(mode) {
-        document.getElementById('fullPaymentInfo').style.display = mode === 'full' ? 'block' : 'none';
-        document.getElementById('discountFields').style.display = mode === 'discount' ? 'block' : 'none';
-        document.getElementById('loanFields').style.display = mode === 'loan' ? 'block' : 'none';
-
-        if (mode === 'discount') {
-            document.getElementById('discountAmount').addEventListener('input', updateDiscountedTotal);
-            updateDiscountedTotal();
-        } else {
-            document.getElementById('discountAmount').removeEventListener('input', updateDiscountedTotal);
-        }
-
-        if (mode === 'loan') {
-            document.getElementById('loanAmount').addEventListener('input', updateLoanRemaining);
-            updateLoanRemaining();
-        } else {
-            document.getElementById('loanAmount').removeEventListener('input', updateLoanRemaining);
-        }
-    }
-
-    function updateDiscountedTotal() {
-        const discount = parseFloat(document.getElementById('discountAmount').value) || 0;
-        const newTotal = Math.max(0, currentTotal / 100 - discount);
-        document.getElementById('discountedTotalDisplay').textContent = 'MK ' + newTotal.toFixed(2);
-    }
-
-    function updateLoanRemaining() {
-        const paid = parseFloat(document.getElementById('loanAmount').value) || 0;
-        const remaining = Math.max(0, currentTotal / 100 - paid);
-        document.getElementById('loanRemainingDisplay').textContent = 'MK ' + remaining.toFixed(2);
-    }
-
-    document.querySelectorAll('input[name="paymentMode"]').forEach(radio => {
-        radio.addEventListener('change', function() {
-            togglePaymentMode(this.value);
-        });
-    });
-
-    // Confirm Payment
-    document.getElementById('confirmPaymentBtn').addEventListener('click', function() {
-        const mode = document.querySelector('input[name="paymentMode"]:checked').value;
-        const payload = { payment_mode: mode };
-
-        if (mode === 'discount') {
-            const amount = parseFloat(document.getElementById('discountAmount').value) * 100;
-            const reason = document.getElementById('discountReason').value.trim();
-            
-            if (!amount || amount <= 0) {
-                alert('Please enter a valid discount amount.');
-                return;
-            }
-            if (amount > currentTotal) {
-                alert('Discount cannot exceed the total fee.');
-                return;
-            }
-            if (!reason) {
-                alert('Please enter a reason for the discount.');
-                return;
-            }
-            payload.discount_amount = amount;
-            payload.discount_reason = reason;
-
-        } else if (mode === 'loan') {
-            const amount = parseFloat(document.getElementById('loanAmount').value) * 100;
-            const witness = document.getElementById('loanWitness').value.trim();
-            const dueDate = document.getElementById('loanDueDate').value;
-
-            if (!amount || amount <= 0) {
-                alert('Please enter a valid payment amount.');
-                return;
-            }
-            if (amount >= currentTotal) {
-                alert('Loan only applies to partial payments. Use Full Payment instead.');
-                return;
-            }
-            if (!witness) {
-                alert('Witness name is required for loans.');
-                return;
-            }
-            payload.amount_paid = amount;
-            payload.witness_name = witness;
-            payload.loan_due_date = dueDate || null;
-        }
-
-        // Disable button while processing
-        const btn = this;
-        btn.disabled = true;
-        btn.textContent = 'Processing...';
-
-        fetch('/cashier/process/' + currentVisitId, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                paymentModal.hide();
-                location.reload();
-            } else {
-                alert('Error: ' + (data.error || 'Failed to process payment.'));
-                btn.disabled = false;
-                btn.textContent = '✅ Confirm & Complete';
-            }
-        })
-        .catch(err => {
-            alert('Network error. Please try again.');
-            btn.disabled = false;
-            btn.textContent = '✅ Confirm & Complete';
-        });
-    });
-
-    // Re-enable button when modal is hidden
-    document.getElementById('paymentModal').addEventListener('hidden.bs.modal', function() {
-        const btn = document.getElementById('confirmPaymentBtn');
-        btn.disabled = false;
-        btn.textContent = '✅ Confirm & Complete';
-    });
-
-    // --- View Invoice Logic ---
-    
-    const viewInvoiceModal = new bootstrap.Modal(document.getElementById('viewInvoiceModal'));
-
-    document.querySelectorAll('.view-invoice-btn').forEach(btn => {
-        btn.addEventListener('click', function() {
-            const visitId = this.dataset.id;
-            const patientName = this.dataset.patient;
-            
-            document.getElementById('invPatientName').textContent = patientName;
-            document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-muted">Loading...</td></tr>';
-            viewInvoiceModal.show();
-
-            fetch('/cashier/view/' + visitId)
+            fetch('/cashier/view/' + currentVisitId)
             .then(response => response.json())
             .then(data => {
-                document.getElementById('invDiagnosis').textContent = data.diagnosis;
-                document.getElementById('invTotal').textContent = 'MK ' + (data.total / 100).toFixed(2);
-                
                 let html = '';
                 data.items.forEach(item => {
                     html += `
@@ -422,6 +176,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     `;
                 });
                 document.getElementById('invoiceItemsBody').innerHTML = html;
+                document.getElementById('invTotal').textContent = 'MK ' + (data.total / 100).toFixed(2);
             })
             .catch(() => {
                 document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-danger">Error loading invoice.</td></tr>';
@@ -429,40 +184,186 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
-    // --- Print Invoice Logic ---
-    document.getElementById('printInvoiceBtn').addEventListener('click', function() {
-        // Get the content of the modal body
-        const invoiceContent = document.querySelector('#viewInvoiceModal .modal-body').innerHTML;
+    // Rounds currentTotal (the raw invoice total, in tambala) to the
+    // nearest selected MK value. "0" means no rounding. Standard
+    // round-half-up behavior so cashiers get predictable results.
+    function getRoundedBaseTotal() {
+        const roundTo = parseInt(document.getElementById('roundingSelect').value, 10) || 0;
+        if (roundTo <= 0) return currentTotal;
+        const roundToTambala = roundTo * 100;
+        return Math.round(currentTotal / roundToTambala) * roundToTambala;
+    }
+
+    function updateRoundedTotalDisplay() {
+        const rounded = getRoundedBaseTotal();
+        document.getElementById('roundedTotalDisplay').value = 'MK ' + (rounded / 100).toFixed(2);
+        document.getElementById('modalTotalFee').textContent = 'MK ' + (rounded / 100).toFixed(2);
+        document.getElementById('fullAmountDisplay').textContent = 'MK ' + (getFinalTotal() / 100).toFixed(2);
+        updateLoanRemaining();
+    }
+
+    document.getElementById('roundingSelect').addEventListener('change', updateRoundedTotalDisplay);
+
+    function togglePaymentMode(mode) {
+        document.getElementById('fullPaymentInfo').style.display = mode === 'full' ? 'block' : 'none';
+        document.getElementById('partialPaymentFields').style.display = mode === 'partial' ? 'block' : 'none';
+
+        if (mode === 'partial') {
+            document.getElementById('loanAmount').addEventListener('input', updateLoanRemaining);
+            updateLoanRemaining();
+        } else {
+            document.getElementById('loanAmount').removeEventListener('input', updateLoanRemaining);
+        }
+    }
+
+    // Discount amount always live-updates the full-payment display
+    document.getElementById('discountAmount').addEventListener('input', function() {
+        document.getElementById('fullAmountDisplay').textContent = 'MK ' + (getFinalTotal() / 100).toFixed(2);
+        updateLoanRemaining();
+    });
+
+    function updateLoanRemaining() {
+        const paid = parseFloat(document.getElementById('loanAmount').value) || 0;
+        const remaining = Math.max(0, getFinalTotal() / 100 - paid);
+        document.getElementById('loanRemainingDisplay').textContent = 'MK ' + remaining.toFixed(2);
+    }
+
+    document.querySelectorAll('input[name="payMode"]').forEach(radio => {
+        radio.addEventListener('change', function() {
+            togglePaymentMode(this.value);
+        });
+    });
+
+    // Payment Channel Logic for Reference Label
+    document.getElementById('paymentChannel').addEventListener('change', function() {
+        const val = this.value;
+        const refLabel = document.getElementById('refLabel');
+        const refInput = document.getElementById('paymentReference');
+        const refWrapper = document.getElementById('refFieldWrapper');
+        const medAidFields = document.getElementById('medicalAidFields');
         
-        // Open a new blank window
-        const printWindow = window.open('', '_blank', 'width=800,height=600');
+        if (val === 'Airtel Money' || val === 'TNM Mpamba') {
+            refWrapper.style.display = 'block';
+            refLabel.textContent = 'Phone Number / Agent Code';
+            refInput.placeholder = 'e.g. 0991234567';
+            medAidFields.style.display = 'none';
+        } else if (val === 'Bank Transfer') {
+            refWrapper.style.display = 'block';
+            refLabel.textContent = 'Account Number';
+            refInput.placeholder = 'e.g. 1234567890';
+            medAidFields.style.display = 'none';
+        } else if (val === 'Cheque') {
+            refWrapper.style.display = 'block';
+            refLabel.textContent = 'Cheque Number';
+            refInput.placeholder = 'e.g. 001234';
+            medAidFields.style.display = 'none';
+        } else if (val === 'Medical Aid') {
+            refWrapper.style.display = 'none';
+            refInput.value = '';
+            medAidFields.style.display = 'block';
+        } else {
+            refWrapper.style.display = 'none';
+            refInput.value = '';
+            medAidFields.style.display = 'none';
+        }
+    });
+
+    // 1. Calculate the final total: round first, then apply discount
+    function getFinalTotal() {
+        const discountAmt = parseFloat(document.getElementById('discountAmount').value) * 100 || 0;
+        return Math.max(0, getRoundedBaseTotal() - discountAmt);
+    }
+
+    // 2. CONFIRM PAYMENT HANDLER (Re-written to avoid duplicate events)
+    document.getElementById('confirmPaymentBtn').addEventListener('click', function() {
+        const isFull = document.querySelector('input[name="payMode"]:checked').value === 'full';
+        const finalTotal = getFinalTotal();
         
-        // Write the HTML structure for the print view
-        printWindow.document.write(`
-            <html>
-                <head>
-                    <title>Invoice</title>
-                    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-                    <style>
-                        body { padding: 20px; font-family: Arial, sans-serif; }
-                        .table { width: 100%; margin-bottom: 1rem; }
-                        @media print {
-                            body { -webkit-print-color-adjust: exact; }
-                        }
-                    </style>
-                </head>
-                <body>
-                    <h2 class="text-center mb-4">🏥 ClinicManager Invoice</h2>
-                    ${invoiceContent}
-                    <p class="text-center text-muted mt-4">Thank you for visiting!</p>
-                    <script>
-                        // Automatically trigger print after page loads
-                        window.onload = function() { window.print(); window.close(); };
-                    <\/script>
-                </body>
-            </html>
-        `);
-        printWindow.document.close();
+        const discountAmt = parseFloat(document.getElementById('discountAmount').value) * 100 || 0;
+        const discountReason = document.getElementById('discountReason').value.trim();
+
+        if (discountAmt > 0 && !discountReason) {
+            alert('Please enter a reason for the discount.');
+            return;
+        }
+
+        const roundTo = parseInt(document.getElementById('roundingSelect').value, 10) || 0;
+
+        const payload = { 
+            payment_mode: isFull ? 'full' : 'loan',
+            payment_channel: document.getElementById('paymentChannel').value,
+            payment_reference: document.getElementById('paymentReference').value.trim() || null,
+            medical_aid_company: document.getElementById('medicalAidCompany').value.trim() || null,
+            discount_amount: discountAmt,
+            discount_reason: discountReason || null,
+            round_to: roundTo || null,
+            rounded_total: roundTo ? getRoundedBaseTotal() : null
+        };
+
+        if (isFull) {
+            payload.amount_paid = finalTotal;
+        } else {
+            const amountPaid = parseFloat(document.getElementById('loanAmount').value) * 100 || 0;
+            const witness = document.getElementById('loanWitness').value;
+            const dueDate = document.getElementById('loanDueDate').value;
+
+            if (!amountPaid || amountPaid <= 0) {
+                alert('Please enter a valid payment amount for the loan.');
+                return;
+            }
+            if (amountPaid >= finalTotal) {
+                alert('If paying the full amount, please select "Pay Full Amount" instead.');
+                return;
+            }
+            if (!witness) {
+                alert('Witness is required for partial payments/loans.');
+                return;
+            }
+            payload.amount_paid = amountPaid;
+            payload.witness_id = witness;
+            payload.loan_due_date = dueDate || null;
+        }
+
+        const btn = this;
+        btn.disabled = true;
+        btn.textContent = 'Processing...';
+
+        if (!currentVisitId) {
+            alert('Error: Visit ID is missing. Please refresh and try again.');
+            btn.disabled = false;
+            btn.textContent = '✅ Confirm & Complete';
+            return;
+        }
+
+        fetch('/cashier/process/' + currentVisitId, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                document.getElementById('paymentModal').querySelector('.btn-close').click();
+                location.reload();
+            } else {
+                alert('Error: ' + (data.error || 'Failed to process payment.'));
+                btn.disabled = false;
+                btn.textContent = '✅ Confirm & Complete';
+            }
+        })
+        .catch(err => {
+            console.error(err);
+            alert('Network error. Please try again.');
+            btn.disabled = false;
+            btn.textContent = '✅ Confirm & Complete';
+        });
+    });
+
+    // Re-enable button when modal is hidden
+    document.getElementById('paymentModal').addEventListener('hidden.bs.modal', function() {
+        const btn = document.getElementById('confirmPaymentBtn');
+        btn.disabled = false;
+        btn.textContent = '✅ Confirm & Complete';
     });
 });
 </script>

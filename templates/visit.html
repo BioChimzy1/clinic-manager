@@ -163,11 +163,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
             // Items with no stock concept (Procedures, Consultation) have
             // no real ceiling -- only cap the input when there's an
-            // actual usableQty to respect. The max attribute alone is a
-            // soft hint (some mobile keyboards/browsers don't enforce it
-            // strictly while typing), so the input/blur handlers below
-            // also clamp and warn explicitly -- this is the client-side
-            // half; the real enforcement is server-side on submit.
+            // actual usableQty to respect.
             const maxAttr = item.noStockConcept ? '' : `max="${item.usableQty}"`;
 
             tr.innerHTML = `
@@ -191,13 +187,6 @@ document.addEventListener('DOMContentLoaded', function () {
         grandTotalEl.textContent = formatMK(grandTotal);
 
         // Wire up qty changes and remove buttons for the rows just rendered.
-        //
-        // IMPORTANT: typing in the qty box must NOT call renderSelectedTable()
-        // on every keystroke -- that destroys and recreates this exact input
-        // element, which steals focus and dismisses the mobile keyboard mid-type.
-        // Instead, just update this row's line-total and the grand total in
-        // place, and only validate/clamp the value once the person is done
-        // editing (on blur), not while they're actively typing or deleting.
         selectedBody.querySelectorAll('.qty-input').forEach(input => {
             input.addEventListener('input', function () {
                 const id = this.getAttribute('data-id');
@@ -211,12 +200,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 const limit = entry.item.usableQty;
 
                 if (!isNaN(raw) && raw >= 1) {
-                    // Valid positive number -- commit it as the real
-                    // quantity and show its true line total, regardless
-                    // of whether it's over the limit. We still let them
-                    // see the total update live; the warning (below) is
-                    // what tells them it won't be accepted as-is, and
-                    // blur will clamp it back down once they're done.
                     entry.qty = raw;
                     const lineTotal = calculateLineTotal(entry.item, entry.qty);
                     row.querySelector('.line-total').textContent = formatMK(lineTotal);
@@ -229,13 +212,6 @@ document.addEventListener('DOMContentLoaded', function () {
                         warningEl.style.display = 'none';
                     }
                 } else {
-                    // Empty, 0, negative, or non-numeric: this can NEVER
-                    // be committed or submitted (entry.qty is left
-                    // untouched, and blur below will clamp it back up to
-                    // 1) -- but the line total should still visibly show
-                    // MK 0.00 right now rather than a stale leftover
-                    // total, so what's on screen matches what's actually
-                    // typed.
                     row.querySelector('.line-total').textContent = formatMK(0);
                     warningEl.style.display = 'none';
                 }
@@ -246,14 +222,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 const entry = selected.get(id);
                 if (!entry) return;
 
-                // Now that editing is finished, clamp anything invalid,
-                // empty, or over-the-available-limit back to a sane
-                // value, then do a full re-render to keep everything in
-                // sync. Clamping down to the limit here (rather than
-                // leaving an over-limit number sitting in the box) keeps
-                // what's on screen always submittable -- the doctor can
-                // still raise it again right up to the real limit if
-                // more stock comes in before they hit Save.
                 let qty = parseInt(this.value, 10);
                 if (isNaN(qty) || qty < 1) qty = 1;
                 if (!entry.item.noStockConcept && qty > entry.item.usableQty) {
@@ -274,16 +242,10 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function addItem(item) {
-        if (!isSelectable(item)) return; // safety net; UI already prevents this
+        if (!isSelectable(item)) return;
         if (selected.has(item.id)) {
-            // Already added -- just bump quantity by 1 instead of duplicating
             selected.get(item.id).qty += 1;
         } else {
-            // Default to this item's "Quantity in Pack" from the price
-            // list (e.g. a syrup priced per bottle of 100ml might default
-            // to 1, but a price entry covering a strip of 10 tablets
-            // might default to 10) rather than always starting at 1.
-            // Guard against a missing/non-positive default just in case.
             const startingQty = (item.defaultQuantity && item.defaultQuantity >= 1) ? item.defaultQuantity : 1;
             selected.set(item.id, { item: item, qty: startingQty });
         }
@@ -352,13 +314,6 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        // Don't rely solely on the blur handler having already fixed up
-        // every quantity field -- if someone taps Save while a field is
-        // still showing 0, empty, or something invalid (without that
-        // field ever losing focus first), catch it here too. This reads
-        // the live DOM value directly rather than trusting `selected`,
-        // since `selected` may still hold a stale committed value if the
-        // person never typed anything valid for this row at all.
         const qtyInputs = document.querySelectorAll('.qty-input');
         for (const input of qtyInputs) {
             const qty = parseInt(input.value, 10);
