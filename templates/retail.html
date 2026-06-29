@@ -6,6 +6,31 @@
             <h3 class="mb-0">🏪 Pharmacy Retail Sale</h3>
         </div>
 
+        <!-- Pending Retail Sales: drafts created via "Proceed to Payment"
+             that were never confirmed (modal closed, browser back, etc).
+             These never appear in the consultation Cashier queue -- they
+             live here so they can be resumed or cancelled without ever
+             mixing with patients waiting after a consultation. -->
+        <div class="card shadow-sm mb-4" id="pendingRetailCard" style="display: none;">
+            <div class="card-header bg-warning text-dark">
+                <h5 class="mb-0">⏳ Pending Retail Sales</h5>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-sm table-striped align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Started</th>
+                                <th class="text-end">Total (MK)</th>
+                                <th class="text-end">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="pendingRetailBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
         <div class="card shadow-sm mb-4">
             <div class="card-header bg-success text-white">
                 <h5 class="mb-0">🛒 Add Items</h5>
@@ -38,6 +63,7 @@
             <div class="card-header bg-dark text-white">
                 <h5 class="mb-0">🧾 Current Sale</h5>
             </div>
+
             <div class="card-body">
                 <div class="table-responsive">
                     <table class="table table-sm table-striped align-middle">
@@ -87,6 +113,147 @@ document.addEventListener('DOMContentLoaded', function() {
     function formatMK(tambala) {
         return 'MK ' + (tambala / 100).toFixed(2);
     }
+
+    // --- PENDING RETAIL SALES (abandoned drafts: created via
+    // create_draft but never confirmed) ---
+    function loadPendingRetail() {
+        fetch('/retail/pending')
+            .then(res => res.json())
+            .then(data => {
+                const card = document.getElementById('pendingRetailCard');
+                const body = document.getElementById('pendingRetailBody');
+
+                if (!data.success || data.pending.length === 0) {
+                    card.style.display = 'none';
+                    return;
+                }
+
+                card.style.display = 'block';
+                body.innerHTML = '';
+
+                // Every draft here is guaranteed 'Ready for Cashier'
+                // with amount_paid = 0 -- /retail/pending excludes
+                // 'Loan Active' entirely. Once a retail sale takes its
+                // first payment it graduates to the /loans page
+                // instead, so there's nothing to brand or guard here.
+                data.pending.forEach(draft => {
+                    const tr = document.createElement('tr');
+
+                    tr.innerHTML = `
+                        <td><small>${new Date(draft.created_at).toLocaleString()}</small></td>
+                        <td class="text-end">${formatMK(draft.total_fee)}</td>
+                        <td class="text-end">
+                            <button class="btn btn-outline-primary btn-sm resume-draft-btn" data-id="${draft.visit_id}" data-total="${draft.total_fee}">
+                                ▶ Resume
+                            </button>
+                            <button class="btn btn-outline-danger btn-sm cancel-draft-btn ms-1" data-id="${draft.visit_id}">✕ Cancel</button>
+                        </td>
+                    `;
+                    body.appendChild(tr);
+                });
+
+                wireDraftButtons();
+            })
+            .catch(err => console.error('Could not load pending retail sales:', err));
+    }
+
+    function wireDraftButtons() {
+        document.querySelectorAll('.resume-draft-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                resumeDraft(
+                    this.getAttribute('data-id'),
+                    parseInt(this.getAttribute('data-total'))
+                );
+            });
+        });
+
+        document.querySelectorAll('.cancel-draft-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const visitId = this.getAttribute('data-id');
+                if (!confirm('Cancel this unpaid retail sale? This cannot be undone.')) return;
+
+                fetch('/retail/cancel/' + visitId, { method: 'POST' })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.success) {
+                            loadPendingRetail();
+                        } else {
+                            alert('Error: ' + data.error);
+                        }
+                    })
+                    .catch(err => {
+                        console.error(err);
+                        alert('Network error. Please try again.');
+                    });
+            });
+        });
+    }
+
+    // Resume a pending draft: reopen the same payment modal used for a
+    // brand-new sale, but skip create_draft (the visit already exists)
+    // and load its real invoice items from the server instead of the
+    // in-memory cart, since the page may have been reloaded since the
+    // draft was created. Every draft reaching here is guaranteed
+    // fully unpaid (status = 'Ready for Cashier', amount_paid = 0) --
+    // /retail/pending excludes anything that already has a payment.
+    function resumeDraft(visitId, totalFee) {
+        retailVisitId = visitId;
+        retailTotal = totalFee;
+
+        document.getElementById('modalPatientName').textContent = '🏪 Retail Sale';
+        document.getElementById('modalTotalFee').textContent = formatMK(totalFee);
+        document.getElementById('fullAmountDisplay').textContent = formatMK(totalFee);
+
+        // Reset form
+        document.getElementById('discountAmount').value = '';
+        document.getElementById('discountReason').value = '';
+        document.getElementById('loanAmount').value = '';
+        document.getElementById('loanWitness').value = '';
+        document.getElementById('loanDueDate').value = '';
+        document.getElementById('paymentReference').value = '';
+        document.getElementById('paymentChannel').value = 'Cash';
+        document.getElementById('medicalAidCompany').value = '';
+        document.getElementById('medicalAidFields').style.display = 'none';
+        document.getElementById('refFieldWrapper').style.display = 'none';
+        document.getElementById('roundingSelect').value = '0';
+        updateRoundedTotalDisplay();
+
+        document.getElementById('payFull').checked = true;
+        togglePaymentMode('full');
+
+        document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-muted">Loading items...</td></tr>';
+        paymentModal.show();
+
+        fetch('/cashier/view/' + visitId)
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    document.getElementById('invoiceItemsBody').innerHTML = `<tr><td colspan="5" class="text-center text-danger">${data.error}</td></tr>`;
+                    return;
+                }
+                let html = '';
+                data.items.forEach(item => {
+                    html += `
+                        <tr>
+                            <td><span class="badge bg-info text-dark">${item.type}</span></td>
+                            <td><strong>${item.name}</strong></td>
+                            <td class="text-end">${formatMK(item.unit_price)}</td>
+                            <td class="text-end">${item.qty}</td>
+                            <td class="text-end">${formatMK(item.total)}</td>
+                        </tr>
+                    `;
+                });
+                document.getElementById('invoiceItemsBody').innerHTML = html;
+                document.getElementById('invTotal').textContent = formatMK(retailTotal);
+            })
+            .catch(err => {
+                console.error(err);
+                document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-danger">Network error loading items.</td></tr>';
+            });
+    }
+
+    // (Pending retail sales are loaded at the end of this script, once
+    // paymentModal and the resume/cancel helpers above are all wired up.)
 
     // Render the cart table
     function renderCart() {
@@ -434,6 +601,10 @@ document.addEventListener('DOMContentLoaded', function() {
         btn.disabled = false;
         btn.textContent = '✅ Confirm & Complete';
     });
+
+    // Load any abandoned drafts now that the modal and all its helper
+    // functions above are fully wired up.
+    loadPendingRetail();
 });
 </script>
 {% endblock %}

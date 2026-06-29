@@ -23,8 +23,6 @@
                         <th>Diagnosis</th>
                         <th class="text-end">Total (MK)</th>
                         <th class="text-end">Paid (MK)</th>
-                        <th>Status</th>
-                        <th>Loan Witness</th>
                         <th class="text-end">Action</th>
                     </tr>
                 </thead>
@@ -35,40 +33,20 @@
                         <td><small class="text-muted">{{ visit[3] }}</small></td>
                         <td class="text-end">{{ "%.2f"|format(visit[4] / 100) }}</td>
                         <td class="text-end">{{ "%.2f"|format(visit[5] / 100) }}</td>
-                        <td>
-                            {% if visit[7] == 'Ready for Cashier' %}
-                                <span class="badge bg-warning text-dark">Pending</span>
-                            {% else %}
-                                <span class="badge bg-info text-dark">Loan Active</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if visit[6] %}
-                                <small>{{ visit[6] }}</small>
-                            {% else %}
-                                <span class="text-muted">—</span>
-                            {% endif %}
-                        </td>
                         <td class="text-end">
-                            {% if visit[7] == 'Loan Active' %}
-                                <a href="/cashier/loan/{{ visit[0] }}" class="btn btn-outline-info btn-sm">
-                                    📋 Loan
-                                </a>
-                            {% else %}
-                                <button class="btn btn-primary btn-sm process-payment-btn"
-                                        data-id="{{ visit[0] }}"
-                                        data-total="{{ visit[4] }}"
-                                        data-paid="{{ visit[5] }}"
-                                        data-status="{{ visit[7] }}"
-                                        data-patient="{{ visit[11] }}">
-                                    💳 Process
-                                </button>
-                            {% endif %}
+                            <button class="btn btn-primary btn-sm process-payment-btn"
+                                    data-id="{{ visit[0] }}"
+                                    data-total="{{ visit[4] }}"
+                                    data-paid="{{ visit[5] }}"
+                                    data-status="{{ visit[7] }}"
+                                    data-patient="{{ visit[11] }}">
+                                💳 Process
+                            </button>
                         </td>
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="7" class="text-center text-muted py-4">No patients awaiting cashier.</td>
+                        <td colspan="5" class="text-center text-muted py-4">No patients awaiting cashier.</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -148,13 +126,10 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('payFull').checked = true;
             togglePaymentMode('full');
 
-            // If it's already a loan, default to Partial mode
-            if (currentStatus === 'Loan Active') {
-                document.getElementById('payPartial').checked = true;
-                togglePaymentMode('partial');
-                document.getElementById('loanAmount').value = ((currentTotal - currentPaid) / 100).toFixed(2);
-                updateLoanRemaining();
-            }
+            // (Loans are no longer paid through this modal -- /cashier
+            // only ever shows 'Ready for Cashier' visits now. Active
+            // loans are handled exclusively via /loans and
+            // loan_details.html's repayment form.)
 
             // Load Invoice Items
             document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-muted">Loading items...</td></tr>';

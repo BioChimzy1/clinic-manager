@@ -447,7 +447,7 @@ def register():
         cursor.execute('''
             INSERT INTO patients (uuid, clinic_id, name, date_of_birth, sex, phone, location, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (str(uuid.uuid4()), 1, name, date_of_birth, sex, phone, location, datetime.datetime.now().isoformat()))
+        ''', (str(uuid.uuid4()), clinic_id, name, date_of_birth, sex, phone, location, datetime.datetime.now().isoformat()))
         
         patient_id = cursor.lastrowid
         
@@ -462,7 +462,7 @@ def register():
             INSERT INTO appointments (uuid, clinic_id, patient_id, doctor_id, appointment_date, appointment_type, reason, status, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
-            str(uuid.uuid4()), 1, patient_id, 1, 
+            str(uuid.uuid4()), clinic_id, patient_id, session.get('staff_id'), 
             datetime.datetime.now().isoformat(), 
             appointment_type,
             'Consultation',
@@ -574,7 +574,7 @@ def schedule_appointment():
             cursor.execute('''
                 INSERT INTO patients (uuid, clinic_id, name, date_of_birth, sex, phone, location, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (str(uuid.uuid4()), 1, name, dob, sex, phone, location, datetime.datetime.now().isoformat()))
+            ''', (str(uuid.uuid4()), clinic_id, name, dob, sex, phone, location, datetime.datetime.now().isoformat()))
             patient_id = cursor.lastrowid
         
         appointment_date = request.form['appointment_date']
@@ -584,7 +584,7 @@ def schedule_appointment():
         cursor.execute('''
             INSERT INTO appointments (uuid, clinic_id, patient_id, doctor_id, appointment_date, appointment_type, reason, status, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (str(uuid.uuid4()), 1, patient_id, 1, appointment_date, 'Appointment', reason, 'Pending', datetime.datetime.now().isoformat()))
+        ''', (str(uuid.uuid4()), clinic_id, patient_id, session.get('staff_id'), appointment_date, 'Appointment', reason, 'Pending', datetime.datetime.now().isoformat()))
         
         conn.commit()
         conn.close()
@@ -883,7 +883,7 @@ def inventory():
             cursor.execute('''
                 INSERT INTO inventory (uuid, clinic_id, category, item_name, quantity, min_alert_level, expiry_date, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (str(uuid.uuid4()), 1, category, item_name, quantity, min_alert, expiry, datetime.datetime.now().isoformat()))
+            ''', (str(uuid.uuid4()), clinic_id, category, item_name, quantity, min_alert, expiry, datetime.datetime.now().isoformat()))
 
             conn.commit()
             conn.close()
@@ -1001,7 +1001,7 @@ def price_list():
         cursor.execute('''
             INSERT INTO price_list (uuid, clinic_id, inventory_id, item_type, item_name, price, quantity, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (str(uuid.uuid4()), 1, inventory_id, item_type, item_name, price, quantity, datetime.datetime.now().isoformat()))
+        ''', (str(uuid.uuid4()), clinic_id, inventory_id, item_type, item_name, price, quantity, datetime.datetime.now().isoformat()))
         conn.commit()
         conn.close()
         return redirect(url_for('price_list'))
@@ -1346,7 +1346,7 @@ def visit(patient_id):
             INSERT INTO visits (uuid, clinic_id, patient_id, doctor_id, appointment_id,
                                  visit_date, diagnosis, total_fee, status, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (visit_uuid, 1, patient_id, 1, appointment_id, now, diagnosis, total_fee, 'Ready for Cashier', now))
+        ''', (visit_uuid, clinic_id, patient_id, session.get('staff_id'), appointment_id, now, diagnosis, total_fee, 'Ready for Cashier', now))
         visit_id = cursor.lastrowid
 
         for (pl_id, pl_name, pl_type, price_per_unit, pl_inventory_id, qty, line_total) in line_items:
@@ -1412,10 +1412,10 @@ def visit(patient_id):
 # ------------------------------------------------------------------
 @app.route('/cashier')
 def cashier():
+    """Show brand-new consultation visits awaiting their first payment decision (status = 'Ready for Cashier' only). Active loans -- consultation or retail -- live exclusively on /loans instead."""
     clinic_id = get_current_clinic_id()
     if not clinic_id:
         return redirect(url_for('setup_clinic'))
-    """Show all visits with status 'Ready for Cashier' or 'Loan Active'"""
     # Role check: Admin, Cashier, or Doctor (case-insensitive)
     allowed_roles = ['admin', 'cashier', 'doctor']
     user_role = session.get('role', '').lower()
@@ -1426,7 +1426,28 @@ def cashier():
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
     
-    # Fetch visits ready for cashier or with active loans
+    # Fetch visits ready for cashier or with active loans -- consultation
+    # visits only. Retail sales (is_retail = 1) are intentionally
+    # excluded: they have their own "Pending Retail Sales" list on the
+    # /retail page (see retail_pending() below) and their own
+    # resume/cancel flow there, so a half-finished over-the-counter
+    # sale never clutters the queue a doctor/cashier uses for patients
+    # actually waiting to be charged after a consultation. Both flows
+    # still finalize payment through the exact same /cashier/process
+    # route below -- only the queue they're surfaced in differs.
+    #
+    # Plain JOIN is correct here (not LEFT JOIN): every visit left
+    # after the is_retail filter is a real consultation visit, which
+    # always has a patient attached.
+    #
+    # status = 'Ready for Cashier' ONLY -- 'Loan Active' visits are
+    # deliberately excluded. Cashier is now purely "new visits that
+    # need a first payment decision"; anyone who already has an active
+    # loan (consultation OR retail) is handled exclusively through the
+    # /loans page and loan_details.html's repayment form, which is the
+    # correct, additive, witness-only-on-creation flow -- the cashier
+    # modal's "Full Payment" button would otherwise charge the entire
+    # original total instead of the real remaining balance.
     cursor.execute('''
         SELECT 
             visits.id,
@@ -1444,9 +1465,11 @@ def cashier():
             patients.id AS patient_id
         FROM visits
         JOIN patients ON visits.patient_id = patients.id
-        WHERE visits.status IN ('Ready for Cashier', 'Loan Active')
+        WHERE visits.clinic_id = ?
+          AND visits.status = 'Ready for Cashier'
+          AND (visits.is_retail IS NULL OR visits.is_retail = 0)
         ORDER BY visits.created_at ASC
-    ''')
+    ''', (clinic_id,))
     cashier_list = cursor.fetchall()
     conn.close()
     
@@ -1456,7 +1479,10 @@ def cashier():
                           
 @app.route('/cashier/view/<int:visit_id>', methods=['GET'])
 def view_cashier_invoice(visit_id):
-    """View-only route to show the items charged for a specific visit."""
+    """View-only route to show the items charged for a specific visit.
+    Used by both the Cashier page (consultation visits) and the Retail
+    page (resuming a pending retail draft) -- LEFT JOIN is required so
+    retail visits, which have patient_id = NULL, don't 404 here."""
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
     
@@ -1465,7 +1491,7 @@ def view_cashier_invoice(visit_id):
         SELECT visits.total_fee, visits.amount_paid, visits.diagnosis, visits.status,
                patients.name AS patient_name
         FROM visits
-        JOIN patients ON visits.patient_id = patients.id
+        LEFT JOIN patients ON visits.patient_id = patients.id
         WHERE visits.id = ?
     ''', (visit_id,))
     visit = cursor.fetchone()
@@ -1485,7 +1511,7 @@ def view_cashier_invoice(visit_id):
     conn.close()
     
     return {
-        'patient': visit[4],
+        'patient': visit[4] or '🏪 Retail Sale',
         'diagnosis': visit[2],
         'total': visit[0],
         'paid': visit[1],
@@ -1600,6 +1626,15 @@ def process_payment(visit_id):
         
         if payment_mode == 'full':
             # Full Payment, optionally with a discount applied on top.
+            # current_paid may already be > 0 here -- this branch is also
+            # reached when someone pays off the REMAINDER of an existing
+            # loan in full (status was 'Loan Active'). amount_due is the
+            # final total the visit should show as paid; collected_now is
+            # what actually changed hands in this transaction, which is
+            # the only figure that should ever hit loan_payments / a
+            # day's cash total. Without this distinction, paying off an
+            # old loan would silently re-count money collected on an
+            # earlier day as if it arrived today.
             discount_amount = data.get('discount_amount') or 0
             discount_reason = (data.get('discount_reason') or '').strip()
 
@@ -1620,6 +1655,13 @@ def process_payment(visit_id):
 
             amount_due = total_fee - discount_amount
 
+            if current_paid > amount_due:
+                conn.rollback()
+                conn.close()
+                return {'success': False, 'error': 'Amount already paid exceeds the discounted total. Adjust the discount first.'}
+
+            collected_now = amount_due - current_paid
+
             cursor.execute('''
                 UPDATE visits
                 SET amount_paid = ?,
@@ -1629,11 +1671,35 @@ def process_payment(visit_id):
                     updated_at = ?
                 WHERE id = ?
             ''', (amount_due, discount_amount, discount_reason or None, now, visit_id))
+
+            # If this visit had a prior loan payment (current_paid > 0),
+            # record today's remainder as its own loan_payments entry --
+            # same reasoning as add_loan_payment(): finance/dashboard cash
+            # totals sum loan_payments by date, so the money collected
+            # today for an old loan must be dated today, separately from
+            # whatever was already recorded on the day(s) it was first paid.
+            if current_paid > 0 and collected_now > 0:
+                cursor.execute('''
+                    INSERT INTO loan_payments (uuid, visit_id, payment_date, amount, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (str(uuid.uuid4()), visit_id, now, collected_now, now))
             
         elif payment_mode == 'loan':
             # Loan: partial payment, witness required. A discount may also
             # be applied, reducing the effective amount owed.
-            amount_paid = data.get('amount_paid')
+            #
+            # amount_paid_now is exactly what the modal's "Amount Paid Now"
+            # field means -- money changing hands in THIS transaction, not
+            # a running total. current_paid (fetched earlier from the
+            # visit row) may already be > 0 if this is an additional
+            # payment on an existing loan, not the loan's first payment.
+            # The new running total is current_paid + amount_paid_now, the
+            # same arithmetic add_loan_payment() already uses correctly
+            # for the dedicated "Record Payment" flow on loan_details.html
+            # -- this route needed to match it instead of overwriting
+            # amount_paid with just the new field value, which silently
+            # erased whatever had already been paid earlier.
+            amount_paid_now = data.get('amount_paid')
             witness_id = data.get('witness_id')
             loan_due_date = data.get('loan_due_date')
             discount_amount = data.get('discount_amount') or 0
@@ -1656,15 +1722,22 @@ def process_payment(visit_id):
 
             effective_total = total_fee - discount_amount
 
-            if amount_paid is None or amount_paid < 0:
+            if amount_paid_now is None or amount_paid_now < 0:
                 conn.rollback()
                 conn.close()
                 return {'success': False, 'error': 'Invalid payment amount.'}
-            
-            if amount_paid >= effective_total:
+
+            if current_paid > effective_total:
                 conn.rollback()
                 conn.close()
-                return {'success': False, 'error': 'Loan only applies to partial payments. Use Full Payment instead.'}
+                return {'success': False, 'error': 'Amount already paid exceeds the discounted total. Adjust the discount first.'}
+
+            new_total_paid = current_paid + amount_paid_now
+
+            if new_total_paid >= effective_total:
+                conn.rollback()
+                conn.close()
+                return {'success': False, 'error': 'This payment would cover the full remaining balance. Use Full Payment instead.'}
             
             if not witness_id:
                 conn.rollback()
@@ -1697,15 +1770,16 @@ def process_payment(visit_id):
                     status = 'Loan Active',
                     updated_at = ?
                 WHERE id = ?
-            ''', (amount_paid, witness_name, loan_due_date, discount_amount, discount_reason or None, now, visit_id))
+            ''', (new_total_paid, witness_name, loan_due_date, discount_amount, discount_reason or None, now, visit_id))
             
-            # Record initial loan payment in loan_payments table
-            loan_balance = effective_total - amount_paid
-            if loan_balance > 0:
-                cursor.execute('''
-                    INSERT INTO loan_payments (uuid, visit_id, payment_date, amount, created_at)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (str(uuid.uuid4()), visit_id, now, amount_paid, now))
+            # Record this payment in loan_payments. amount_paid_now is
+            # always the correct figure here regardless of whether this
+            # is the loan's first payment or an additional one -- it's
+            # exactly what was collected in this transaction.
+            cursor.execute('''
+                INSERT INTO loan_payments (uuid, visit_id, payment_date, amount, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (str(uuid.uuid4()), visit_id, now, amount_paid_now, now))
         
         # ------------------------------------------------------------------
         # INVENTORY DEDUCTION: FEFO (First-Expired, First-Out)
@@ -1756,6 +1830,57 @@ def process_payment(visit_id):
         conn.close()
         return {'success': False, 'error': str(e)}
 
+
+@app.route('/loans', methods=['GET'])
+def loans():
+    """Single combined view of every visit with an active loan, whether
+    it came from a consultation (has a real patient) or a retail sale
+    (patient_id IS NULL, is_retail = 1). This is now the ONLY place
+    loans are browsed from -- /cashier intentionally excludes
+    'Loan Active' visits entirely (it only shows brand-new 'Ready for
+    Cashier' visits), and /retail's pending-drafts list is a separate
+    concept (unpaid drafts, not loans specifically -- a retail loan
+    will appear in both lists, which is correct: one answers "what's
+    an unfinished retail sale", the other answers "who owes money").
+    Linking into loan_details.html from here is what actually lets
+    someone record a repayment; that page's form is already correct
+    (additive, clamped to the real balance, no repeated witness
+    requirement) so no payment logic needed to change here."""
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
+
+    allowed_roles = ['admin', 'cashier', 'doctor', 'receptionist']
+    user_role = session.get('role', '').lower()
+    if user_role not in allowed_roles:
+        flash('You do not have permission to access Loans.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT
+            visits.id,
+            visits.total_fee,
+            visits.amount_paid,
+            visits.loan_witness,
+            visits.loan_due_date,
+            visits.created_at,
+            visits.is_retail,
+            patients.name AS patient_name
+        FROM visits
+        LEFT JOIN patients ON visits.patient_id = patients.id
+        WHERE visits.clinic_id = ?
+          AND visits.status = 'Loan Active'
+        ORDER BY visits.loan_due_date IS NULL, visits.loan_due_date ASC, visits.created_at ASC
+    ''', (clinic_id,))
+    loan_list = cursor.fetchall()
+    conn.close()
+
+    today_str = datetime.date.today().isoformat()
+    return render_template('loans.html', loan_list=loan_list, today_str=today_str, role=session.get('role'))
+
+
 @app.route('/cashier/loan/<int:visit_id>', methods=['GET'])
 def loan_details(visit_id):
     clinic_id = get_current_clinic_id()
@@ -1783,9 +1908,9 @@ def loan_details(visit_id):
             patients.name AS patient_name,
             patients.id AS patient_id
         FROM visits
-        JOIN patients ON visits.patient_id = patients.id
-        WHERE visits.id = ?
-    ''', (visit_id,))
+        LEFT JOIN patients ON visits.patient_id = patients.id
+        WHERE visits.id = ? AND visits.clinic_id = ?
+    ''', (visit_id, clinic_id))
     visit = cursor.fetchone()
     
     if not visit:
@@ -1897,7 +2022,7 @@ def add_loan_payment(visit_id):
 # ------------------------------------------------------------------
 # RETAIL / PHARMACY SALES (Non-clinical)
 # ------------------------------------------------------------------
-@app.route('/retail', methods=['GET', 'POST'])
+@app.route('/retail', methods=['GET'])
 def retail():
     clinic_id = get_current_clinic_id()
     if not clinic_id:
@@ -1909,129 +2034,19 @@ def retail():
         flash('You do not have permission to access Retail Sales.', 'danger')
         return redirect(url_for('dashboard'))
 
-    if request.method == 'POST':
-        # Get the hidden cart data
-        cart_data_json = request.form.get('cart_data')
-        amount_paid = int(float(request.form.get('amount_paid', 0)) * 100) # To Tambala
-
-        if not cart_data_json:
-            flash('No items in cart.', 'danger')
-            return redirect(url_for('retail'))
-        
-        import json
-        cart = json.loads(cart_data_json)
-
-        conn = sqlite3.connect('clinic.db')
-        cursor = conn.cursor()
-
-        try:
-            total_fee = 0
-            visit_items = []
-
-            # 1. Verify all items and calculate totals
-            today_str = datetime.date.today().isoformat()
-            for item in cart:
-                cursor.execute('''
-                    SELECT price_list.id, price_list.item_name, price_list.item_type, price_list.price, 
-                           price_list.quantity AS pack_quantity, price_list.inventory_id,
-                           COALESCE(stock.usable_qty, 0) AS usable_qty
-                    FROM price_list
-                    LEFT JOIN inventory AS linked_item ON price_list.inventory_id = linked_item.id
-                    LEFT JOIN (
-                        SELECT LOWER(TRIM(item_name)) AS name_key, category,
-                               SUM(CASE WHEN expiry_date >= ? THEN quantity ELSE 0 END) AS usable_qty
-                        FROM inventory WHERE is_active = 1 GROUP BY name_key, category
-                    ) AS stock ON stock.name_key = LOWER(TRIM(linked_item.item_name)) 
-                             AND stock.category = linked_item.category
-                    WHERE price_list.id = ? AND price_list.is_active = 1
-                ''', (today_str, item['price_list_id']))
-                
-                row = cursor.fetchone()
-                if not row:
-                    conn.close()
-                    flash(f'Item not found: {item["name"]}', 'danger')
-                    return redirect(url_for('retail'))
-
-                pl_id, pl_name, pl_type, pl_price, pl_pack_qty, pl_inv_id, usable_qty = row
-                qty_sold = item['qty']
-
-                if pl_inv_id is not None and qty_sold > usable_qty:
-                    conn.close()
-                    flash(f'Only {usable_qty} units of "{pl_name}" available.', 'danger')
-                    return redirect(url_for('retail'))
-
-                pack_qty = pl_pack_qty if pl_pack_qty and pl_pack_qty > 0 else 1
-                price_per_unit = pl_price / pack_qty
-                line_total = round(price_per_unit * qty_sold)
-                total_fee += line_total
-
-                visit_items.append({
-                    'pl_id': pl_id,
-                    'pl_name': pl_name,
-                    'pl_type': pl_type,
-                    'pl_inv_id': pl_inv_id,
-                    'qty_sold': qty_sold,
-                    'price_per_unit': price_per_unit,
-                    'line_total': line_total
-                })
-
-            # 2. Create the Retail Visit
-            now = datetime.datetime.now().isoformat()
-            # updated_at is set to the same value as created_at here,
-            # not left NULL. finance() and dashboard() both compute cash
-            # totals by filtering on updated_at (since that's when a
-            # normal clinic visit actually gets PAID, separately from
-            # when it was first created) -- a retail sale is created
-            # already-paid in one step, so created_at and updated_at
-            # are genuinely the same moment for it. Leaving updated_at
-            # NULL made every retail sale invisible to those SUM()
-            # queries (NULL >= date comparisons are never true in SQL),
-            # even though it still showed up fine in the raw recent-
-            # transactions list, which orders by created_at instead.
-            cursor.execute('''
-                INSERT INTO visits (uuid, clinic_id, patient_id, doctor_id, appointment_id, visit_date, 
-                                    diagnosis, total_fee, amount_paid, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (str(uuid.uuid4()), clinic_id, None, None, None, now, 'Retail Sale', total_fee, amount_paid, 'Paid', now, now))
-            
-            visit_id = cursor.lastrowid
-
-            # 3. Insert visit_items and Deduct Inventory
-            for item in visit_items:
-                cursor.execute('''
-                    INSERT INTO visit_items (uuid, visit_id, inventory_id, price_list_id, item_type, item_name,
-                                             quantity, price_per_unit, total_line_price, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (str(uuid.uuid4()), visit_id, item['pl_inv_id'], item['pl_id'], item['pl_type'], item['pl_name'], 
-                      item['qty_sold'], round(item['price_per_unit']), item['line_total'], now))
-
-                if item['pl_inv_id'] is not None:
-                    cursor.execute('''
-                        SELECT id, quantity FROM inventory
-                        WHERE LOWER(TRIM(item_name)) = LOWER(TRIM(?)) AND is_active = 1
-                        ORDER BY expiry_date ASC
-                    ''', (item['pl_name'],))
-                    batches = cursor.fetchall()
-                    
-                    remaining = item['qty_sold']
-                    for batch_id, batch_qty in batches:
-                        if remaining <= 0: break
-                        if batch_qty > 0:
-                            deduct = min(remaining, batch_qty)
-                            cursor.execute("UPDATE inventory SET quantity = quantity - ?, updated_at = ? WHERE id = ?", (deduct, now, batch_id))
-                            remaining -= deduct
-
-            conn.commit()
-            conn.close()
-            
-            flash(f'Retail sale completed! Total MK {total_fee/100:.2f}', 'success')
-            return redirect(url_for('retail'))
-
-        except Exception as e:
-            conn.rollback()
-            conn.close()
-            flash(f'Error processing sale: {str(e)}', 'danger')
-            return redirect(url_for('retail'))
+    # NOTE: there used to be a POST handler here that created an
+    # already-Paid visit directly, with its own separate copy of the
+    # pricing/discount/inventory-deduction logic. retail.html no longer
+    # calls it -- the page now creates a draft visit via
+    # /retail/create_draft and finalizes payment through
+    # /cashier/process/<visit_id>, the exact same route the Cashier
+    # page uses. That keeps a single source of truth for "what happens
+    # when a visit gets paid" (status transitions, payment_channel,
+    # discount/rounding validation, FEFO inventory deduction) instead
+    # of two slightly-different implementations drifting apart, which
+    # was the root cause of dashboard/finance/cashier numbers
+    # disagreeing. Removed rather than left dead, so nothing can ever
+    # get wired back to this shortcut by accident.
 
     # GET: Show the retail form
     conn = sqlite3.connect('clinic.db')
@@ -2138,7 +2153,107 @@ def retail_create_draft():
         conn.rollback()
         conn.close()
         return {'success': False, 'error': str(e)}    
-    
+
+
+@app.route('/retail/pending', methods=['GET'])
+def retail_pending():
+    """List retail drafts awaiting their FIRST payment decision (created
+    via create_draft but not yet finalized through /cashier/process).
+    status = 'Ready for Cashier' ONLY -- once a retail sale takes its
+    first partial payment and becomes 'Loan Active', it is no longer a
+    "pending draft"; it's a loan, and graduates entirely to the /loans
+    page (loan_details.html's repayment form), exactly like a
+    consultation loan does. Including 'Loan Active' here would surface
+    the same sale in two places with two different (and inconsistent)
+    ways to pay it -- a "Resume" button reopening the original
+    payment-creation modal here, vs the correct additive repayment
+    form on /loans -- which is the bug this comment is preventing."""
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return {'success': False, 'error': 'No clinic selected.'}
+
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, total_fee, amount_paid, status, created_at
+        FROM visits
+        WHERE clinic_id = ?
+          AND is_retail = 1
+          AND status = 'Ready for Cashier'
+        ORDER BY created_at DESC
+    ''', (clinic_id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    return {
+        'success': True,
+        'pending': [
+            {
+                'visit_id': r[0],
+                'total_fee': r[1],
+                'amount_paid': r[2],
+                'status': r[3],
+                'created_at': r[4],
+            }
+            for r in rows
+        ]
+    }
+
+
+@app.route('/retail/cancel/<int:visit_id>', methods=['POST'])
+def retail_cancel(visit_id):
+    """Cancel an abandoned retail draft. Only allowed for retail visits
+    that are still unpaid/undeducted -- create_draft never deducts
+    inventory (that only happens inside process_payment), so cancelling
+    here is a plain status change with nothing to restore. A visit
+    that has already taken a loan payment (Loan Active with
+    amount_paid > 0) is NOT cancellable from here -- real money has
+    already changed hands for it, so it must be resumed and completed
+    through the normal payment flow instead, same as a consultation
+    loan would be."""
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return {'success': False, 'error': 'No clinic selected.'}
+
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        SELECT status, amount_paid, is_retail
+        FROM visits
+        WHERE id = ? AND clinic_id = ?
+    ''', (visit_id, clinic_id))
+    row = cursor.fetchone()
+
+    if not row:
+        conn.close()
+        return {'success': False, 'error': 'Visit not found.'}
+
+    status, amount_paid, is_retail = row
+
+    if not is_retail:
+        conn.close()
+        return {'success': False, 'error': 'This is not a retail sale.'}
+
+    if amount_paid and amount_paid > 0:
+        conn.close()
+        return {'success': False, 'error': 'This sale already has a payment recorded and cannot be cancelled. Resume and complete it instead.'}
+
+    now = datetime.datetime.now().isoformat()
+    cursor.execute('''
+        UPDATE visits
+        SET status = 'Cancelled', updated_at = ?
+        WHERE id = ? AND status = 'Ready for Cashier'
+    ''', (now, visit_id))
+
+    if cursor.rowcount == 0:
+        conn.close()
+        return {'success': False, 'error': 'Only unpaid drafts can be cancelled.'}
+
+    conn.commit()
+    conn.close()
+    return {'success': True}
+
 
 # ------------------------------------------------------------------
 # FINANCE & REPORTING DASHBOARD
@@ -2315,7 +2430,7 @@ def add_expense():
     cursor.execute('''
         INSERT INTO expenses (uuid, clinic_id, expense_date, category, description, amount, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-    ''', (str(uuid.uuid4()), 1, expense_date, category, description, amount, datetime.datetime.now().isoformat()))
+    ''', (str(uuid.uuid4()), clinic_id, expense_date, category, description, amount, datetime.datetime.now().isoformat()))
     
     conn.commit()
     conn.close()
@@ -2560,19 +2675,45 @@ def dashboard():
     cursor.execute("SELECT COUNT(*) FROM price_list WHERE clinic_id = ? AND is_active = 1", (clinic_id,))
     priced_items_count = cursor.fetchone()[0]
 
-    # --- Cashier stats ---
-    cursor.execute("SELECT COUNT(*) FROM visits WHERE clinic_id = ? AND status IN ('Ready for Cashier', 'Loan Active')", (clinic_id,))
+    # --- Cashier stats: brand-new visits awaiting a first payment ---
+    cursor.execute("SELECT COUNT(*) FROM visits WHERE clinic_id = ? AND status = 'Ready for Cashier'", (clinic_id,))
     cashier_count = cursor.fetchone()[0]
 
-    # --- NEW: Total Cash Collected TODAY ---
+    # --- Loans stats: everyone with an active loan, consultation or retail ---
+    cursor.execute("SELECT COUNT(*) FROM visits WHERE clinic_id = ? AND status = 'Loan Active'", (clinic_id,))
+    loans_count = cursor.fetchone()[0]
+
+    # --- Total Cash Collected TODAY ---
+    # Mirrors finance()'s total_cash calculation. Money collected today
+    # comes from two mutually-exclusive sources:
+    #   a) Visits paid in full directly, that never touched loan_payments
+    #   b) Every loan_payments row dated today (a loan's initial partial
+    #      payment, or any later repayment) -- dated by when that
+    #      specific payment happened, not by the visit's updated_at,
+    #      which only reflects the most recent touch to the visit.
+    # The previous version only summed (a), so any money collected via
+    # a loan repayment today was invisible here even though finance()
+    # counted it correctly -- that's why the two pages disagreed.
     today_start = today.isoformat() + 'T00:00:00'
     today_end = today.isoformat() + 'T23:59:59'
     cursor.execute('''
         SELECT SUM(amount_paid) FROM visits 
-        WHERE status = 'Paid' 
+        WHERE clinic_id = ?
+        AND status = 'Paid' 
+        AND id NOT IN (SELECT DISTINCT visit_id FROM loan_payments)
         AND updated_at >= ? AND updated_at <= ?
-    ''', (today_start, today_end))
-    today_cash_collected = cursor.fetchone()[0] or 0
+    ''', (clinic_id, today_start, today_end))
+    today_cash_direct = cursor.fetchone()[0] or 0
+
+    cursor.execute('''
+        SELECT SUM(loan_payments.amount) FROM loan_payments
+        JOIN visits ON loan_payments.visit_id = visits.id
+        WHERE visits.clinic_id = ?
+        AND loan_payments.payment_date >= ? AND loan_payments.payment_date <= ?
+    ''', (clinic_id, today_start, today_end))
+    today_cash_from_loans = cursor.fetchone()[0] or 0
+
+    today_cash_collected = today_cash_direct + today_cash_from_loans
     
     # --- Appointments stats ---
     cursor.execute("SELECT COUNT(*) FROM appointments WHERE status IN ('Pending', 'Scheduled')")
@@ -2592,6 +2733,7 @@ def dashboard():
         expiring_soon_count=expiring_soon_count,
         priced_items_count=priced_items_count,
         cashier_count=cashier_count,
+        loans_count=loans_count,
         today_cash_collected=today_cash_collected,
         appointments_count=appointments_count
     )
