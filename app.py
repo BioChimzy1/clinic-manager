@@ -1412,10 +1412,12 @@ def visit(patient_id):
 # ------------------------------------------------------------------
 @app.route('/cashier')
 def cashier():
-    """Show brand-new consultation visits awaiting their first payment decision (status = 'Ready for Cashier' only). Active loans -- consultation or retail -- live exclusively on /loans instead."""
     clinic_id = get_current_clinic_id()
     if not clinic_id:
         return redirect(url_for('setup_clinic'))
+    """Show brand-new consultation visits awaiting their first payment
+    decision (status = 'Ready for Cashier' only). Active loans -- 
+    consultation or retail -- live exclusively on /loans instead."""
     # Role check: Admin, Cashier, or Doctor (case-insensitive)
     allowed_roles = ['admin', 'cashier', 'doctor']
     user_role = session.get('role', '').lower()
@@ -2352,22 +2354,51 @@ def finance():
     # 6. Net Profit (Net Revenue - Expenses)
     net_profit = net_revenue - total_expenses
     
-    # 7. Recent transactions (last 10 visits paid within selected period)
+    # 7. Recent transactions (last 10 money-collection EVENTS within the
+    # selected period -- not last 10 visits). A visit that was paid off
+    # as a loan across several days must show up as several separate
+    # rows here, each dated by when that specific installment was
+    # actually collected, each showing only that installment's amount --
+    # not one row showing the visit's cumulative all-time total dated by
+    # whenever it was last touched. Without this, paying off the
+    # remaining MK 3000 of an old MK 6000 loan today would display as
+    # "MK 6000 paid today", silently re-counting money collected on an
+    # earlier day. This mirrors total_cash above exactly: direct full
+    # payments are one event (the visit itself); loan repayments are one
+    # event per loan_payments row.
     cursor.execute('''
-        SELECT 
+        SELECT
             patients.name,
-            visits.updated_at,
+            visits.updated_at AS event_date,
             visits.total_fee,
-            visits.amount_paid,
+            visits.amount_paid AS event_amount,
             visits.discount_amount,
-            visits.status
+            visits.status,
+            visits.is_retail
         FROM visits
         LEFT JOIN patients ON visits.patient_id = patients.id
-        WHERE (visits.status = 'Paid' OR visits.status = 'Loan Active')
-        AND visits.updated_at >= ? AND visits.updated_at <= ?
-        ORDER BY visits.updated_at DESC
+        WHERE visits.status = 'Paid'
+          AND visits.id NOT IN (SELECT DISTINCT visit_id FROM loan_payments)
+          AND visits.updated_at >= ? AND visits.updated_at <= ?
+
+        UNION ALL
+
+        SELECT
+            patients.name,
+            loan_payments.payment_date AS event_date,
+            visits.total_fee,
+            loan_payments.amount AS event_amount,
+            visits.discount_amount,
+            visits.status,
+            visits.is_retail
+        FROM loan_payments
+        JOIN visits ON loan_payments.visit_id = visits.id
+        LEFT JOIN patients ON visits.patient_id = patients.id
+        WHERE loan_payments.payment_date >= ? AND loan_payments.payment_date <= ?
+
+        ORDER BY event_date DESC
         LIMIT 10
-    ''', (start_date, end_date))
+    ''', (start_date, end_date, start_date, end_date))
     recent_transactions = cursor.fetchall()
     
     # 8. Recent expenses (last 10 within selected period)
