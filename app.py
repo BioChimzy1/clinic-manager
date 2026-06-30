@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import datetime
 import uuid
@@ -8,7 +9,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 app = Flask(__name__)
 
 # THIS IS REQUIRED FOR LOGIN SESSIONS TO WORK
-app.secret_key = 'your_secret_key_here_change_this_later'
+app.secret_key = os.environ.get('SECRET_KEY', 'dev-only-fallback-do-not-use-in-prod')
 
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
