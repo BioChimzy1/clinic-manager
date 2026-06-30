@@ -87,7 +87,7 @@
     <div class="card shadow-sm">
         <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
             <h6 class="mb-0">Transactions ({{ period|capitalize }})</h6>
-            <small class="text-muted">Showing up to 10 most recent visits with payments</small>
+            <small class="text-muted">Showing recent visits with payments</small>
         </div>
         <div class="card-body p-0">
             <div class="table-responsive">
@@ -102,79 +102,9 @@
                             <th></th>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody id="transactions-tbody">
                         {% if grouped_transactions %}
-                            {% for gt in grouped_transactions %}
-                                <tr class="main-row">
-                                    <td>
-                                        <strong>{{ gt.patient }}</strong>
-                                        {% if gt.discount_amount > 0 %}
-                                            <br><small class="text-muted">Discount: MK {{ "%.2f"|format(gt.discount_amount / 100) }}</small>
-                                        {% endif %}
-                                        {% if gt.is_retail %}
-                                            <span class="badge bg-success ms-1">Retail</span>
-                                        {% endif %}
-                                    </td>
-
-                                    <!-- Summary column: server chooses summary_date/summary_amount (prefers today's sum) -->
-                                    <td>
-                                        <small>
-                                            {% if gt.summary_date == today_str %}
-                                                <span class="text-success fw-bold">Today</span>
-                                            {% else %}
-                                                {{ gt.summary_date }}
-                                            {% endif %}
-                                        </small>
-                                        <br><small class="text-muted">MK {{ "%.2f"|format(gt.summary_amount / 100) }}</small>
-                                    </td>
-
-                                    <td class="text-end">MK {{ "%.2f"|format(gt.total_fee / 100) }}</td>
-                                    <td class="text-end text-danger fw-bold">MK {{ "%.2f"|format(gt.outstanding / 100) }}</td>
-
-                                    <td>
-                                        <span class="badge {{ 'bg-success' if gt.status == 'Paid' else 'bg-info text-dark' }}">
-                                            {{ gt.status }}
-                                        </span>
-                                    </td>
-
-                                    <td class="text-end">
-                                        <div class="d-flex justify-content-end gap-2">
-                                            {% if gt.status == 'Loan Active' %}
-                                                <a href="/cashier/loan/{{ gt.visit_id }}" class="btn btn-outline-primary btn-sm">View Loan</a>
-                                            {% endif %}
-                                            <button type="button" class="btn btn-outline-secondary btn-sm toggle-installments" data-target="#inst-{{ gt.visit_id }}">
-                                                ▾ Installments
-                                            </button>
-                                        </div>
-                                    </td>
-                                </tr>
-
-                                <tr id="inst-{{ gt.visit_id }}" class="installments-row" style="display: none; background: rgba(0,0,0,0.02);">
-                                    <td colspan="6" style="padding: .5rem 1rem;">
-                                        <div class="small">
-                                            <strong>Payment History</strong>
-                                            <div class="table-responsive mt-2">
-                                                <table class="table table-sm mb-0">
-                                                    <thead>
-                                                        <tr>
-                                                            <th>Date</th>
-                                                            <th class="text-end">Amount</th>
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody>
-                                                        {% for inst in gt.installments %}
-                                                            <tr>
-                                                                <td><small>{{ inst.date }}</small></td>
-                                                                <td class="text-end">MK {{ "%.2f"|format(inst.amount / 100) }}</td>
-                                                            </tr>
-                                                        {% endfor %}
-                                                    </tbody>
-                                                </table>
-                                            </div>
-                                        </div>
-                                    </td>
-                                </tr>
-                            {% endfor %}
+                            {% include '_transaction_rows.html' %}
                         {% else %}
                             <tr>
                                 <td colspan="6" class="text-center text-muted py-3">No transactions in this period.</td>
@@ -182,6 +112,11 @@
                         {% endif %}
                     </tbody>
                 </table>
+            </div>
+            <div class="text-center p-2" id="load-more-container" {% if not has_more %}style="display: none;"{% endif %}>
+                <button type="button" id="load-more-transactions" class="btn btn-outline-dark btn-sm" data-offset="20" data-period="{{ period }}">
+                    Load more
+                </button>
             </div>
         </div>
     </div>
@@ -264,12 +199,17 @@
     </div>
 </div>
 
-<!-- Toggle JS (allow multiple open) -->
+<!-- Toggle JS (allow multiple open) + Lazy-load transactions -->
 <script>
 document.addEventListener('DOMContentLoaded', function () {
-    document.querySelectorAll('.toggle-installments').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-            var target = document.querySelector(this.getAttribute('data-target'));
+    var tbody = document.getElementById('transactions-tbody');
+
+    // Event delegation so toggle buttons work on rows added later via lazy-load
+    if (tbody) {
+        tbody.addEventListener('click', function(e) {
+            var btn = e.target.closest('.toggle-installments');
+            if (!btn) return;
+            var target = document.querySelector(btn.getAttribute('data-target'));
             if (!target) return;
             if (target.style.display === 'none' || target.style.display === '') {
                 target.style.display = 'table-row';
@@ -277,7 +217,40 @@ document.addEventListener('DOMContentLoaded', function () {
                 target.style.display = 'none';
             }
         });
-    });
+    }
+
+    // Load more transactions
+    var loadMoreBtn = document.getElementById('load-more-transactions');
+    if (loadMoreBtn) {
+        loadMoreBtn.addEventListener('click', function() {
+            var offset = parseInt(loadMoreBtn.getAttribute('data-offset'), 10) || 0;
+            var period = loadMoreBtn.getAttribute('data-period') || 'today';
+
+            loadMoreBtn.disabled = true;
+            loadMoreBtn.textContent = 'Loading...';
+
+            fetch('/finance/transactions?period=' + encodeURIComponent(period) + '&offset=' + offset)
+                .then(function(resp) { return resp.json(); })
+                .then(function(data) {
+                    if (data.html && tbody) {
+                        tbody.insertAdjacentHTML('beforeend', data.html);
+                    }
+                    if (data.has_more) {
+                        loadMoreBtn.setAttribute('data-offset', data.next_offset);
+                        loadMoreBtn.disabled = false;
+                        loadMoreBtn.textContent = 'Load more';
+                    } else {
+                        var container = document.getElementById('load-more-container');
+                        if (container) container.style.display = 'none';
+                    }
+                })
+                .catch(function(err) {
+                    console.error('Failed to load more transactions:', err);
+                    loadMoreBtn.disabled = false;
+                    loadMoreBtn.textContent = 'Load more (retry)';
+                });
+        });
+    }
 });
 </script>
 {% endblock %}

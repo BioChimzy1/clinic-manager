@@ -2299,6 +2299,178 @@ def retail_cancel(visit_id):
 # ------------------------------------------------------------------
 # FINANCE & REPORTING DASHBOARD
 # ------------------------------------------------------------------
+def get_period_dates(period):
+    """
+    Translate a 'period' query param (today/week/month) into a
+    (start_date, end_date, normalized_period) tuple of ISO datetime strings.
+    Shared by finance() and finance_transactions() so the date-range logic
+    only needs to be changed in one place.
+    """
+    today = datetime.date.today()
+    if period == 'today':
+        start_date = today.isoformat() + 'T00:00:00'
+        end_date = today.isoformat() + 'T23:59:59'
+    elif period == 'week':
+        start_date = (today - datetime.timedelta(days=7)).isoformat() + 'T00:00:00'
+        end_date = today.isoformat() + 'T23:59:59'
+    elif period == 'month':
+        start_date = (today - datetime.timedelta(days=30)).isoformat() + 'T00:00:00'
+        end_date = today.isoformat() + 'T23:59:59'
+    else:
+        start_date = (today - datetime.timedelta(days=7)).isoformat() + 'T00:00:00'
+        end_date = today.isoformat() + 'T23:59:59'
+        period = 'week'
+    return start_date, end_date, period
+
+
+def build_grouped_transactions(cursor, start_date, end_date, today_str, offset=0, limit=20):
+    """
+    Build the list of per-visit grouped transactions (with installments)
+    for the finance page, ordered newest-first by exact payment timestamp.
+    Supports pagination via offset/limit for lazy-loading.
+    Returns (grouped_transactions, has_more).
+    """
+    # 1) loan_payments grouped by visit_id and by DATE(payment_date)
+    #    NOTE: we keep MAX(payment_date) as a full timestamp (pay_ts) purely
+    #    for ordering -- pay_date stays a plain date for display/grouping.
+    cursor.execute('''
+        SELECT visit_id, DATE(payment_date) AS pay_date, SUM(amount) AS amount_sum,
+               MAX(payment_date) AS pay_ts
+        FROM loan_payments
+        WHERE payment_date >= ? AND payment_date <= ?
+        GROUP BY visit_id, DATE(payment_date)
+    ''', (start_date, end_date))
+    loan_grouped = cursor.fetchall()  # list of (visit_id, pay_date, amount_sum, pay_ts)
+
+    # 2) direct visit payments (visits fully paid in the period and not in loan_payments)
+    cursor.execute('''
+        SELECT id AS visit_id, DATE(updated_at) AS pay_date, amount_paid AS amount_sum,
+               updated_at AS pay_ts
+        FROM visits
+        WHERE status = 'Paid'
+          AND id NOT IN (SELECT DISTINCT visit_id FROM loan_payments)
+          AND updated_at >= ? AND updated_at <= ?
+    ''', (start_date, end_date))
+    direct_grouped = cursor.fetchall()
+
+    # Combine into per-visit installments map
+    from collections import defaultdict
+    installments_map = defaultdict(list)  # visit_id -> list of {date, amount, ts}
+
+    for visit_id, pay_date, amount_sum, pay_ts in loan_grouped:
+        if pay_date:
+            installments_map[visit_id].append({'date': pay_date, 'amount': amount_sum, 'ts': pay_ts})
+    for visit_id, pay_date, amount_sum, pay_ts in direct_grouped:
+        if pay_date:
+            installments_map[visit_id].append({'date': pay_date, 'amount': amount_sum, 'ts': pay_ts})
+
+    grouped_transactions = []
+    has_more = False
+    if installments_map:
+        visit_latest = []
+        for vid, insts in installments_map.items():
+            # Sort installments by full timestamp desc (newest first)
+            insts_sorted = sorted(insts, key=lambda x: x['ts'], reverse=True)
+            installments_map[vid] = insts_sorted
+            latest_date = insts_sorted[0]['date']
+            latest_amount = insts_sorted[0]['amount']
+            latest_ts = insts_sorted[0]['ts']
+            # sum of installments with date == today
+            today_total = sum(inst['amount'] for inst in insts_sorted if inst['date'] == today_str)
+            visit_latest.append((vid, latest_date, latest_amount, today_total, latest_ts))
+
+        # Order by full timestamp DESC (true newest-first, no day-level ties)
+        visit_latest.sort(key=lambda x: x[4], reverse=True)
+
+        # Pagination: take a page starting at offset, and detect if more remain
+        total_count = len(visit_latest)
+        page = visit_latest[offset:offset + limit]
+        has_more = (offset + limit) < total_count
+        top_visit_ids = [v[0] for v in page]
+
+        # Fetch visit metadata including amount_paid so we can compute outstanding
+        if top_visit_ids:
+            qmarks = ','.join(['?'] * len(top_visit_ids))
+            cursor.execute(f'''
+                SELECT visits.id, visits.total_fee, visits.amount_paid, visits.discount_amount, visits.status, visits.is_retail, patients.name
+                FROM visits
+                LEFT JOIN patients ON visits.patient_id = patients.id
+                WHERE visits.id IN ({qmarks})
+            ''', top_visit_ids)
+            visit_rows = cursor.fetchall()
+            visits_by_id = {r[0]: r for r in visit_rows}
+
+            for vid, latest_date, latest_amount, today_total, latest_ts in page:
+                vrow = visits_by_id.get(vid)
+                if vrow:
+                    # Choose summary: prefer today's total when present, otherwise latest
+                    if today_total and today_total > 0:
+                        summary_date = today_str
+                        summary_amount = today_total
+                    else:
+                        summary_date = latest_date
+                        summary_amount = latest_amount
+
+                    total_fee = vrow[1] or 0
+                    amount_paid = vrow[2] or 0
+                    discount_amount = vrow[3] or 0
+                    outstanding = max(0, total_fee - discount_amount - amount_paid)
+
+                    grouped_transactions.append({
+                        'visit_id': vrow[0],
+                        'patient': vrow[6] or '🏪 Retail Sale',
+                        'summary_date': summary_date,
+                        'summary_amount': summary_amount,
+                        'latest_date': latest_date,
+                        'latest_amount': latest_amount,
+                        'today_total': today_total,
+                        'total_fee': total_fee,
+                        'amount_paid': amount_paid,
+                        'discount_amount': discount_amount,
+                        'outstanding': outstanding,
+                        'status': vrow[4] or '',
+                        'is_retail': vrow[5] or 0,
+                        'installments': installments_map.get(vid, [])
+                    })
+
+    return grouped_transactions, has_more
+
+
+@app.route('/finance/transactions')
+def finance_transactions():
+    """Lazy-load endpoint: returns the next batch of grouped transaction rows as HTML."""
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return {'error': 'No clinic'}, 403
+
+    allowed_roles = ['admin', 'cashier', 'doctor']
+    if session.get('role', '').lower() not in allowed_roles:
+        return {'error': 'Permission denied'}, 403
+
+    period = request.args.get('period', 'today')
+    try:
+        offset = int(request.args.get('offset', 0))
+    except ValueError:
+        offset = 0
+
+    start_date, end_date, period = get_period_dates(period)
+    today_str = datetime.date.today().isoformat()
+
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    grouped_transactions, has_more = build_grouped_transactions(
+        cursor, start_date, end_date, today_str, offset=offset, limit=20
+    )
+    conn.close()
+
+    html = render_template(
+        '_transaction_rows.html',
+        grouped_transactions=grouped_transactions,
+        today_str=today_str
+    )
+    return {'html': html, 'has_more': has_more, 'next_offset': offset + 20}
+
+
 @app.route('/finance')
 def finance():
     clinic_id = get_current_clinic_id()
@@ -2318,20 +2490,7 @@ def finance():
     # Get date range filter
     period = request.args.get('period', 'today')
     today = datetime.date.today()
-    
-    if period == 'today':
-        start_date = today.isoformat() + 'T00:00:00'
-        end_date = today.isoformat() + 'T23:59:59'
-    elif period == 'week':
-        start_date = (today - datetime.timedelta(days=7)).isoformat() + 'T00:00:00'
-        end_date = today.isoformat() + 'T23:59:59'
-    elif period == 'month':
-        start_date = (today - datetime.timedelta(days=30)).isoformat() + 'T00:00:00'
-        end_date = today.isoformat() + 'T23:59:59'
-    else:
-        start_date = (today - datetime.timedelta(days=7)).isoformat() + 'T00:00:00'
-        end_date = today.isoformat() + 'T23:59:59'
-        period = 'week'
+    start_date, end_date, period = get_period_dates(period)
     
     # 1. Total Cash Collected (direct visits paid in full during range)
     cursor.execute('''
@@ -2381,107 +2540,12 @@ def finance():
     
     # -------------------------
     # Build grouped (per-visit) transactions with installments
+    # (first page of 20; further pages loaded lazily via /finance/transactions)
     # -------------------------
     today_str = today.isoformat()
-    # 1) loan_payments grouped by visit_id and by DATE(payment_date)
-    #    NOTE: we keep MAX(payment_date) as a full timestamp (pay_ts) purely
-    #    for ordering -- pay_date stays a plain date for display/grouping.
-    cursor.execute('''
-        SELECT visit_id, DATE(payment_date) AS pay_date, SUM(amount) AS amount_sum,
-               MAX(payment_date) AS pay_ts
-        FROM loan_payments
-        WHERE payment_date >= ? AND payment_date <= ?
-        GROUP BY visit_id, DATE(payment_date)
-    ''', (start_date, end_date))
-    loan_grouped = cursor.fetchall()  # list of (visit_id, pay_date, amount_sum, pay_ts)
-    
-    # 2) direct visit payments (visits fully paid in the period and not in loan_payments)
-    cursor.execute('''
-        SELECT id AS visit_id, DATE(updated_at) AS pay_date, amount_paid AS amount_sum,
-               updated_at AS pay_ts
-        FROM visits
-        WHERE status = 'Paid'
-          AND id NOT IN (SELECT DISTINCT visit_id FROM loan_payments)
-          AND updated_at >= ? AND updated_at <= ?
-    ''', (start_date, end_date))
-    direct_grouped = cursor.fetchall()
-    
-    # Combine into per-visit installments map
-    from collections import defaultdict
-    installments_map = defaultdict(list)  # visit_id -> list of {date, amount, ts}
-    
-    for visit_id, pay_date, amount_sum, pay_ts in loan_grouped:
-        if pay_date:
-            installments_map[visit_id].append({'date': pay_date, 'amount': amount_sum, 'ts': pay_ts})
-    for visit_id, pay_date, amount_sum, pay_ts in direct_grouped:
-        if pay_date:
-            installments_map[visit_id].append({'date': pay_date, 'amount': amount_sum, 'ts': pay_ts})
-    
-    # Build grouped_transactions, limit 10 by most recent payment date (prefer visits with payments today)
-    grouped_transactions = []
-    if installments_map:
-        visit_latest = []
-        for vid, insts in installments_map.items():
-            # Sort installments by full timestamp desc (newest first)
-            insts_sorted = sorted(insts, key=lambda x: x['ts'], reverse=True)
-            installments_map[vid] = insts_sorted
-            latest_date = insts_sorted[0]['date']
-            latest_amount = insts_sorted[0]['amount']
-            latest_ts = insts_sorted[0]['ts']
-            # sum of installments with date == today
-            today_total = sum(inst['amount'] for inst in insts_sorted if inst['date'] == today_str)
-            # We'll choose a summary per-visit later (prefer today's total if present)
-            visit_latest.append((vid, latest_date, latest_amount, today_total, latest_ts))
-        
-        # Order by full timestamp DESC (true newest-first, no day-level ties) and keep top 10
-        visit_latest.sort(key=lambda x: x[4], reverse=True)
-        top_visits = visit_latest[:10]
-        top_visit_ids = [v[0] for v in top_visits]
-        
-        # Fetch visit metadata including amount_paid so we can compute outstanding
-        if top_visit_ids:
-            qmarks = ','.join(['?'] * len(top_visit_ids))
-            cursor.execute(f'''
-                SELECT visits.id, visits.total_fee, visits.amount_paid, visits.discount_amount, visits.status, visits.is_retail, patients.name
-                FROM visits
-                LEFT JOIN patients ON visits.patient_id = patients.id
-                WHERE visits.id IN ({qmarks})
-            ''', top_visit_ids)
-            visit_rows = cursor.fetchall()
-            visits_by_id = {r[0]: r for r in visit_rows}
-            
-            for vid, latest_date, latest_amount, today_total, latest_ts in top_visits:
-                vrow = visits_by_id.get(vid)
-                if vrow:
-                    # Choose summary: prefer today's total when present, otherwise latest
-                    if today_total and today_total > 0:
-                        summary_date = today_str
-                        summary_amount = today_total
-                    else:
-                        summary_date = latest_date
-                        summary_amount = latest_amount
-
-                    total_fee = vrow[1] or 0
-                    amount_paid = vrow[2] or 0
-                    discount_amount = vrow[3] or 0
-                    outstanding = max(0, total_fee - discount_amount - amount_paid)
-
-                    grouped_transactions.append({
-                        'visit_id': vrow[0],
-                        'patient': vrow[6] or '🏪 Retail Sale',
-                        'summary_date': summary_date,
-                        'summary_amount': summary_amount,
-                        'latest_date': latest_date,
-                        'latest_amount': latest_amount,
-                        'today_total': today_total,
-                        'total_fee': total_fee,
-                        'amount_paid': amount_paid,
-                        'discount_amount': discount_amount,
-                        'outstanding': outstanding,
-                        'status': vrow[4] or '',
-                        'is_retail': vrow[5] or 0,
-                        'installments': installments_map.get(vid, [])
-                    })
+    grouped_transactions, has_more = build_grouped_transactions(
+        cursor, start_date, end_date, today_str, offset=0, limit=20
+    )
     
     # 7. Recent expenses (last 10 within selected period)
     cursor.execute('''
@@ -2505,6 +2569,7 @@ def finance():
         total_expenses=total_expenses,
         net_profit=net_profit,
         grouped_transactions=grouped_transactions,
+        has_more=has_more,
         recent_expenses=recent_expenses,
         role=session.get('role'),
         today_str=today_str  # <-- Add this for template to show "Today" text

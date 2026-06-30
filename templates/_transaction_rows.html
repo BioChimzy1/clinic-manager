@@ -1,0 +1,71 @@
+{% for gt in grouped_transactions %}
+    <tr class="main-row">
+        <td>
+            <strong>{{ gt.patient }}</strong>
+            {% if gt.discount_amount > 0 %}
+                <br><small class="text-muted">Discount: MK {{ "%.2f"|format(gt.discount_amount / 100) }}</small>
+            {% endif %}
+            {% if gt.is_retail %}
+                <span class="badge bg-success ms-1">Retail</span>
+            {% endif %}
+        </td>
+
+        <!-- Summary column: server chooses summary_date/summary_amount (prefers today's sum) -->
+        <td>
+            <small>
+                {% if gt.summary_date == today_str %}
+                    <span class="text-success fw-bold">Today</span>
+                {% else %}
+                    {{ gt.summary_date }}
+                {% endif %}
+            </small>
+            <br><small class="text-muted">MK {{ "%.2f"|format(gt.summary_amount / 100) }}</small>
+        </td>
+
+        <td class="text-end">MK {{ "%.2f"|format(gt.total_fee / 100) }}</td>
+        <td class="text-end text-danger fw-bold">MK {{ "%.2f"|format(gt.outstanding / 100) }}</td>
+
+        <td>
+            <span class="badge {{ 'bg-success' if gt.status == 'Paid' else 'bg-info text-dark' }}">
+                {{ gt.status }}
+            </span>
+        </td>
+
+        <td class="text-end">
+            <div class="d-flex justify-content-end gap-2">
+                {% if gt.status == 'Loan Active' %}
+                    <a href="/cashier/loan/{{ gt.visit_id }}" class="btn btn-outline-primary btn-sm">View Loan</a>
+                {% endif %}
+                <button type="button" class="btn btn-outline-secondary btn-sm toggle-installments" data-target="#inst-{{ gt.visit_id }}">
+                    ▾ Installments
+                </button>
+            </div>
+        </td>
+    </tr>
+
+    <tr id="inst-{{ gt.visit_id }}" class="installments-row" style="display: none; background: rgba(0,0,0,0.02);">
+        <td colspan="6" style="padding: .5rem 1rem;">
+            <div class="small">
+                <strong>Payment History</strong>
+                <div class="table-responsive mt-2">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th class="text-end">Amount</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for inst in gt.installments %}
+                                <tr>
+                                    <td><small>{{ inst.date }}</small></td>
+                                    <td class="text-end">MK {{ "%.2f"|format(inst.amount / 100) }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </td>
+    </tr>
+{% endfor %}
