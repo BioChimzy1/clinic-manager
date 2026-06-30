@@ -18,11 +18,16 @@
             <div class="card bg-light mb-3 p-3">
                 <h6>Register New Patient</h6>
                 <div class="mb-2">
-                    <input type="text" name="new_name" class="form-control" placeholder="Full Name">
+                    <label class="form-label small text-muted mb-1">Full Name</label>
+                    <input type="text" name="new_name" class="form-control" placeholder="e.g. Bio Chimzy">
                 </div>
                 <div class="row mb-2">
-                    <div class="col-6"><input type="date" name="new_dob" class="form-control"></div>
                     <div class="col-6">
+                        <label class="form-label small text-muted mb-1">Date of Birth</label>
+                        <input type="date" name="new_dob" class="form-control">
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label small text-muted mb-1">Sex</label>
                         <select name="new_sex" class="form-select">
                             <option value="Male">Male</option>
                             <option value="Female">Female</option>
@@ -30,10 +35,12 @@
                     </div>
                 </div>
                 <div class="mb-2">
-                    <input type="text" name="new_phone" class="form-control" placeholder="Phone">
+                    <label class="form-label small text-muted mb-1">Phone Number</label>
+                    <input type="text" name="new_phone" class="form-control" placeholder="099xxxxxxx">
                 </div>
                 <div>
-                    <input type="text" name="new_location" class="form-control" placeholder="Location">
+                    <label class="form-label small text-muted mb-1">Location / Area</label>
+                    <input type="text" name="new_location" class="form-control" placeholder="e.g. Mkwalula">
                 </div>
             </div>
 
