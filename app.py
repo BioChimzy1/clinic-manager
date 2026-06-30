@@ -17,7 +17,14 @@ app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 # HELPER FUNCTION
 # ------------------------------------------------------------------
 def get_current_clinic_id():
-    """Returns the clinic_id of the currently logged-in staff member."""
+    """Returns the clinic_id of the currently logged-in staff member.
+    Reads from session cache first (set at login) to avoid a DB hit on
+    every request. Falls back to a DB lookup for any request that arrives
+    without the cache (e.g. session created before this change was deployed).
+    """
+    cached = session.get('clinic_id')
+    if cached:
+        return cached
     staff_id = session.get('staff_id')
     if not staff_id:
         return None
@@ -26,7 +33,10 @@ def get_current_clinic_id():
     cursor.execute("SELECT clinic_id FROM staff WHERE id = ? AND is_active = 1", (staff_id,))
     row = cursor.fetchone()
     conn.close()
-    return row[0] if row and row[0] else None
+    clinic_id = row[0] if row and row[0] else None
+    if clinic_id:
+        session['clinic_id'] = clinic_id  # warm the cache
+    return clinic_id
     
 # ------------------------------------------------------------------
 # AUDIT LOGGING HELPER
@@ -387,6 +397,7 @@ def login():
         if user and check_password_hash(user[2], password):
             session['staff_id'] = user[0]
             session['role'] = user[1]
+            session['clinic_id'] = user[3]  # cache to avoid per-request DB lookups
             
             # Redirect to setup if they have no clinic
             if not user[3] or user[3] == 0:
@@ -439,6 +450,7 @@ def setup_clinic():
         conn.commit()
         conn.close()
         
+        session['clinic_id'] = clinic_id  # warm session cache for new clinic
         flash(f'Clinic "{clinic_name}" created successfully! You are now the Admin.', 'success')
         return redirect(url_for('dashboard'))
     
@@ -517,8 +529,9 @@ def queue():
         FROM patients
         JOIN appointments ON patients.id = appointments.patient_id
         WHERE appointments.status IN ('Waiting', 'Pending')
+          AND appointments.clinic_id = ?
         ORDER BY appointments.created_at ASC
-    ''')
+    ''', (clinic_id,))
     queue_list = cursor.fetchall()
     conn.close()
     
@@ -560,8 +573,9 @@ def appointments():
         FROM appointments
         JOIN patients ON appointments.patient_id = patients.id
         WHERE appointments.status NOT IN ('Waiting', 'Pending', 'In Progress', 'Completed')
+          AND appointments.clinic_id = ?
         ORDER BY appointments.appointment_date ASC
-    ''')
+    ''', (clinic_id,))
     appointment_list = cursor.fetchall()
     conn.close()
 
@@ -615,7 +629,7 @@ def schedule_appointment():
         return redirect(url_for('appointments'))
     
     # GET: Load existing patients for the dropdown
-    cursor.execute("SELECT id, name, phone FROM patients WHERE is_active = 1 ORDER BY name")
+    cursor.execute("SELECT id, name, phone FROM patients WHERE clinic_id = ? AND is_active = 1 ORDER BY name", (clinic_id,))
     patients = cursor.fetchall()
     conn.close()
 
@@ -706,9 +720,10 @@ def review_appointment(patient_id):
         FROM patients
         JOIN appointments ON patients.id = appointments.patient_id
         WHERE patients.id = ? AND appointments.status = 'Pending'
+          AND appointments.clinic_id = ?
         ORDER BY appointments.created_at DESC
         LIMIT 1
-    ''', (patient_id,))
+    ''', (patient_id, clinic_id))
     row = cursor.fetchone()
 
     if row is None:
@@ -838,10 +853,11 @@ def inventory():
                 SET item_name = ?, category = ?, min_alert_level = ?, updated_at = ?
                 WHERE LOWER(TRIM(item_name)) = LOWER(TRIM(?))
                   AND category = ?
+                  AND clinic_id = ?
                   AND is_active = 1
                   AND id != ?
             ''', (item_name, category, min_alert, datetime.datetime.now().isoformat(),
-                  original_name, original_category, inventory_id))
+                  original_name, original_category, clinic_id, inventory_id))
 
             # 3. Keep the Price List name in sync for the edited row AND
             #    every sibling batch, since they all share the drug's name.
@@ -861,9 +877,9 @@ def inventory():
             #    older row and remove the duplicate.
             cursor.execute("""
                 SELECT id, quantity FROM inventory 
-                WHERE LOWER(TRIM(item_name)) = LOWER(TRIM(?)) AND category = ? AND expiry_date = ? AND is_active = 1
+                WHERE LOWER(TRIM(item_name)) = LOWER(TRIM(?)) AND category = ? AND expiry_date = ? AND clinic_id = ? AND is_active = 1
                 ORDER BY id ASC
-            """, (item_name, category, expiry))
+            """, (item_name, category, expiry, clinic_id))
             rows = cursor.fetchall()
 
             if len(rows) > 1:
@@ -896,8 +912,8 @@ def inventory():
             item_name = ' '.join(item_name.split())
             cursor.execute("""
                 SELECT id FROM inventory 
-                WHERE LOWER(TRIM(item_name)) = LOWER(TRIM(?)) AND category = ? AND expiry_date = ? AND is_active = 1
-            """, (item_name, category, expiry))
+                WHERE LOWER(TRIM(item_name)) = LOWER(TRIM(?)) AND category = ? AND expiry_date = ? AND clinic_id = ? AND is_active = 1
+            """, (item_name, category, expiry, clinic_id))
             existing = cursor.fetchone()
 
             if existing:
@@ -918,9 +934,9 @@ def inventory():
             return redirect(url_for('inventory'))
 
     # GET requests
-    cursor.execute("SELECT id, category, item_name, quantity, min_alert_level, expiry_date FROM inventory WHERE is_active = 1 ORDER BY expiry_date ASC")
+    cursor.execute("SELECT id, category, item_name, quantity, min_alert_level, expiry_date FROM inventory WHERE clinic_id = ? AND is_active = 1 ORDER BY expiry_date ASC", (clinic_id,))
     items = cursor.fetchall()
-    cursor.execute("SELECT item_name FROM inventory WHERE is_active = 1")
+    cursor.execute("SELECT item_name FROM inventory WHERE clinic_id = ? AND is_active = 1", (clinic_id,))
     existing_names = cursor.fetchall()
     conn.close()
 
@@ -972,7 +988,7 @@ def reduce_inventory(item_id):
         conn.close()
         return {'success': False, 'error': 'Amount must be greater than 0.'}
 
-    cursor.execute("SELECT quantity FROM inventory WHERE id = ? AND is_active = 1", (item_id,))
+    cursor.execute("SELECT quantity FROM inventory WHERE id = ? AND clinic_id = ? AND is_active = 1", (item_id, clinic_id))
     row = cursor.fetchone()
 
     if row is None:
@@ -1073,6 +1089,7 @@ def price_list():
             ON stock.name_key = LOWER(TRIM(linked_item.item_name))
             AND stock.category = linked_item.category
         WHERE price_list.is_active = 1
+          AND price_list.clinic_id = ?
         ORDER BY
             CASE
                 WHEN price_list.inventory_id IS NULL THEN 0
@@ -1081,10 +1098,10 @@ def price_list():
                 ELSE 2
             END,
             price_list.item_name
-    ''', (today_str, today_str))
+    ''', (today_str, today_str, clinic_id))
     price_list = cursor.fetchall()
     
-    cursor.execute("SELECT item_name, category FROM inventory WHERE is_active = 1")
+    cursor.execute("SELECT item_name, category FROM inventory WHERE clinic_id = ? AND is_active = 1", (clinic_id,))
     inventory_items = cursor.fetchall()
     
     conn.close()
@@ -1116,7 +1133,7 @@ def update_price_item(item_id):
 
     try:
         # 1. Get the OLD data before updating
-        cursor.execute("SELECT price, quantity, item_type, item_name FROM price_list WHERE id = ?", (item_id,))
+        cursor.execute("SELECT price, quantity, item_type, item_name FROM price_list WHERE id = ? AND clinic_id = ?", (item_id, clinic_id))
         row = cursor.fetchone()
         if row:
             old_price, old_qty, item_type, item_name = row
@@ -1128,8 +1145,8 @@ def update_price_item(item_id):
         cursor.execute('''
             UPDATE price_list 
             SET price = ?, quantity = ?, updated_at = ? 
-            WHERE id = ?
-        ''', (new_price, new_qty, datetime.datetime.now().isoformat(), item_id))
+            WHERE id = ? AND clinic_id = ?
+        ''', (new_price, new_qty, datetime.datetime.now().isoformat(), item_id, clinic_id))
 
         # 3. If anything actually changed, log it to price_history using your perfect table
         if old_price != new_price or old_qty != new_qty:
@@ -1160,8 +1177,8 @@ def delete_price_item(item_id):
     cursor.execute('''
         UPDATE price_list 
         SET is_active = 0, updated_at = ? 
-        WHERE id = ?
-    ''', (datetime.datetime.now().isoformat(), item_id))
+        WHERE id = ? AND clinic_id = ?
+    ''', (datetime.datetime.now().isoformat(), item_id, clinic_id))
     conn.commit()
     log_audit('DELETE_PRICE', 'price_list', item_id, 
           old_value='Active', new_value='Deactivated (Soft Delete)')
@@ -1431,8 +1448,9 @@ def visit(patient_id):
             ON stock.name_key = LOWER(TRIM(linked_item.item_name))
             AND stock.category = linked_item.category
         WHERE price_list.is_active = 1
+          AND price_list.clinic_id = ?
         ORDER BY price_list.item_type, price_list.item_name
-    ''', (today_str, today_str))
+    ''', (today_str, today_str, clinic_id))
     all_priced_items = cursor.fetchall()
 
     conn.close()
@@ -1529,13 +1547,14 @@ def view_cashier_invoice(visit_id):
     cursor = conn.cursor()
     
     # Fetch Visit Details
+    clinic_id = get_current_clinic_id()
     cursor.execute('''
         SELECT visits.total_fee, visits.amount_paid, visits.diagnosis, visits.status,
                patients.name AS patient_name
         FROM visits
         LEFT JOIN patients ON visits.patient_id = patients.id
-        WHERE visits.id = ?
-    ''', (visit_id,))
+        WHERE visits.id = ? AND visits.clinic_id = ?
+    ''', (visit_id, clinic_id))
     visit = cursor.fetchone()
     
     if not visit:
@@ -1587,8 +1606,8 @@ def process_payment(visit_id):
         # Get the visit details
         cursor.execute('''
             SELECT total_fee, amount_paid, status, patient_id, appointment_id, loan_witness
-            FROM visits WHERE id = ?
-        ''', (visit_id,))
+            FROM visits WHERE id = ? AND clinic_id = ?
+        ''', (visit_id, clinic_id))
         visit_row = cursor.fetchone()
         
         if not visit_row:
@@ -1839,9 +1858,9 @@ def process_payment(visit_id):
             cursor.execute('''
                 SELECT id, quantity, expiry_date
                 FROM inventory
-                WHERE LOWER(TRIM(item_name)) = LOWER(TRIM(?)) AND is_active = 1
+                WHERE LOWER(TRIM(item_name)) = LOWER(TRIM(?)) AND clinic_id = ? AND is_active = 1
                 ORDER BY expiry_date ASC
-            ''', (item_name,))
+            ''', (item_name, clinic_id))
             batches = cursor.fetchall()
             
             remaining = qty_to_deduct
@@ -2004,8 +2023,8 @@ def add_loan_payment(visit_id):
     try:
         cursor.execute('''
             SELECT total_fee, amount_paid, status, discount_amount
-            FROM visits WHERE id = ?
-        ''', (visit_id,))
+            FROM visits WHERE id = ? AND clinic_id = ?
+        ''', (visit_id, clinic_id))
         visit = cursor.fetchone()
         
         if not visit:
@@ -2096,9 +2115,9 @@ def retail():
     cursor.execute('''
         SELECT id, item_name, item_type, price, quantity
         FROM price_list
-        WHERE is_active = 1
+        WHERE clinic_id = ? AND is_active = 1
         ORDER BY item_name
-    ''')
+    ''', (clinic_id,))
     items = cursor.fetchall()
     conn.close()
 
@@ -2139,8 +2158,8 @@ def retail_create_draft():
                     FROM inventory WHERE is_active = 1 GROUP BY name_key, category
                 ) AS stock ON stock.name_key = LOWER(TRIM(linked_item.item_name)) 
                          AND stock.category = linked_item.category
-                WHERE price_list.id = ? AND price_list.is_active = 1
-            ''', (today_str, item['price_list_id']))
+                WHERE price_list.id = ? AND price_list.clinic_id = ? AND price_list.is_active = 1
+            ''', (today_str, item['price_list_id'], clinic_id))
             
             row = cursor.fetchone()
             if not row:
@@ -2324,7 +2343,7 @@ def get_period_dates(period):
     return start_date, end_date, period
 
 
-def build_grouped_transactions(cursor, start_date, end_date, today_str, offset=0, limit=20):
+def build_grouped_transactions(cursor, clinic_id, start_date, end_date, today_str, offset=0, limit=20):
     """
     Build the list of per-visit grouped transactions (with installments)
     for the finance page, ordered newest-first by exact payment timestamp.
@@ -2335,12 +2354,15 @@ def build_grouped_transactions(cursor, start_date, end_date, today_str, offset=0
     #    NOTE: we keep MAX(payment_date) as a full timestamp (pay_ts) purely
     #    for ordering -- pay_date stays a plain date for display/grouping.
     cursor.execute('''
-        SELECT visit_id, DATE(payment_date) AS pay_date, SUM(amount) AS amount_sum,
-               MAX(payment_date) AS pay_ts
+        SELECT loan_payments.visit_id, DATE(loan_payments.payment_date) AS pay_date,
+               SUM(loan_payments.amount) AS amount_sum,
+               MAX(loan_payments.payment_date) AS pay_ts
         FROM loan_payments
-        WHERE payment_date >= ? AND payment_date <= ?
-        GROUP BY visit_id, DATE(payment_date)
-    ''', (start_date, end_date))
+        JOIN visits ON loan_payments.visit_id = visits.id
+        WHERE loan_payments.payment_date >= ? AND loan_payments.payment_date <= ?
+          AND visits.clinic_id = ?
+        GROUP BY loan_payments.visit_id, DATE(loan_payments.payment_date)
+    ''', (start_date, end_date, clinic_id))
     loan_grouped = cursor.fetchall()  # list of (visit_id, pay_date, amount_sum, pay_ts)
 
     # 2) direct visit payments (visits fully paid in the period and not in loan_payments)
@@ -2349,9 +2371,10 @@ def build_grouped_transactions(cursor, start_date, end_date, today_str, offset=0
                updated_at AS pay_ts
         FROM visits
         WHERE status = 'Paid'
+          AND clinic_id = ?
           AND id NOT IN (SELECT DISTINCT visit_id FROM loan_payments)
           AND updated_at >= ? AND updated_at <= ?
-    ''', (start_date, end_date))
+    ''', (clinic_id, start_date, end_date))
     direct_grouped = cursor.fetchall()
 
     # Combine into per-visit installments map
@@ -2460,7 +2483,7 @@ def finance_transactions():
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
     grouped_transactions, has_more = build_grouped_transactions(
-        cursor, start_date, end_date, today_str, offset=offset, limit=20
+        cursor, clinic_id, start_date, end_date, today_str, offset=offset, limit=20
     )
     conn.close()
 
@@ -2496,17 +2519,21 @@ def finance():
     # 1. Total Cash Collected (direct visits paid in full during range)
     cursor.execute('''
         SELECT SUM(amount_paid) FROM visits 
-        WHERE status = 'Paid' 
+        WHERE status = 'Paid'
+        AND clinic_id = ?
         AND id NOT IN (SELECT DISTINCT visit_id FROM loan_payments)
         AND updated_at >= ? AND updated_at <= ?
-    ''', (start_date, end_date))
+    ''', (clinic_id, start_date, end_date))
     total_cash_direct = cursor.fetchone()[0] or 0
 
     # 1b. Total cash from loan payments in range
     cursor.execute('''
-        SELECT SUM(amount) FROM loan_payments
-        WHERE payment_date >= ? AND payment_date <= ?
-    ''', (start_date, end_date))
+        SELECT SUM(loan_payments.amount)
+        FROM loan_payments
+        JOIN visits ON loan_payments.visit_id = visits.id
+        WHERE visits.clinic_id = ?
+        AND loan_payments.payment_date >= ? AND loan_payments.payment_date <= ?
+    ''', (clinic_id, start_date, end_date))
     total_cash_from_loans = cursor.fetchone()[0] or 0
 
     total_cash = total_cash_direct + total_cash_from_loans
@@ -2515,15 +2542,17 @@ def finance():
     cursor.execute('''
         SELECT SUM(total_fee - COALESCE(discount_amount, 0) - amount_paid) FROM visits 
         WHERE status = 'Loan Active'
-    ''')
+          AND clinic_id = ?
+    ''', (clinic_id,))
     outstanding_loans = cursor.fetchone()[0] or 0
     
     # 3. Total Discounts Given (within period)
     cursor.execute('''
         SELECT SUM(discount_amount) FROM visits 
-        WHERE discount_amount > 0 
+        WHERE discount_amount > 0
+        AND clinic_id = ?
         AND updated_at >= ? AND updated_at <= ?
-    ''', (start_date, end_date))
+    ''', (clinic_id, start_date, end_date))
     total_discounts = cursor.fetchone()[0] or 0
     
     # 4. Net Revenue
@@ -2532,8 +2561,9 @@ def finance():
     # 5. Total Expenses (within period)
     cursor.execute('''
         SELECT SUM(amount) FROM expenses 
-        WHERE expense_date >= ? AND expense_date <= ?
-    ''', (start_date[:10], end_date[:10]))
+        WHERE clinic_id = ?
+        AND expense_date >= ? AND expense_date <= ?
+    ''', (clinic_id, start_date[:10], end_date[:10]))
     total_expenses = cursor.fetchone()[0] or 0
     
     # 6. Net Profit
@@ -2545,17 +2575,18 @@ def finance():
     # -------------------------
     today_str = today.isoformat()
     grouped_transactions, has_more = build_grouped_transactions(
-        cursor, start_date, end_date, today_str, offset=0, limit=20
+        cursor, clinic_id, start_date, end_date, today_str, offset=0, limit=20
     )
     
     # 7. Recent expenses (last 10 within selected period)
     cursor.execute('''
         SELECT id, expense_date, category, description, amount
         FROM expenses
-        WHERE expense_date >= ? AND expense_date <= ?
+        WHERE clinic_id = ?
+        AND expense_date >= ? AND expense_date <= ?
         ORDER BY expense_date DESC
         LIMIT 10
-    ''', (start_date[:10], end_date[:10]))
+    ''', (clinic_id, start_date[:10], end_date[:10]))
     recent_expenses = cursor.fetchall()
     
     conn.close()
@@ -2633,7 +2664,7 @@ def delete_expense(expense_id):
     
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM expenses WHERE id = ?", (expense_id,))
+    cursor.execute("DELETE FROM expenses WHERE id = ? AND clinic_id = ?", (expense_id, clinic_id))
     conn.commit()
     conn.close()
     
@@ -2834,10 +2865,10 @@ def dashboard():
     cursor = conn.cursor()
 
     # --- Queue stats ---
-    cursor.execute("SELECT COUNT(*) FROM appointments WHERE status = 'Waiting'")
+    cursor.execute("SELECT COUNT(*) FROM appointments WHERE clinic_id = ? AND status = 'Waiting'", (clinic_id,))
     waiting_count = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM appointments WHERE status = 'Pending'")
+    cursor.execute("SELECT COUNT(*) FROM appointments WHERE clinic_id = ? AND status = 'Pending'", (clinic_id,))
     pending_count = cursor.fetchone()[0]
 
     total_queue_count = waiting_count + pending_count
@@ -2928,7 +2959,7 @@ def dashboard():
     today_cash_collected = today_cash_direct + today_cash_from_loans
     
     # --- Appointments stats ---
-    cursor.execute("SELECT COUNT(*) FROM appointments WHERE status IN ('Pending', 'Scheduled')")
+    cursor.execute("SELECT COUNT(*) FROM appointments WHERE clinic_id = ? AND status IN ('Pending', 'Scheduled')", (clinic_id,))
     appointments_count = cursor.fetchone()[0]
     
     conn.close()
@@ -2982,9 +3013,10 @@ def view_audit_log():
                audit_log.record_id, audit_log.old_value, audit_log.new_value, audit_log.timestamp
         FROM audit_log
         LEFT JOIN staff ON audit_log.staff_id = staff.id
+        WHERE staff.clinic_id = ?
         ORDER BY audit_log.timestamp DESC
         LIMIT 50
-    ''')
+    ''', (clinic_id,))
     logs = cursor.fetchall()
     conn.close()
     
