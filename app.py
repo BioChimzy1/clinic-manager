@@ -26,9 +26,30 @@ def get_current_clinic_id():
     row = cursor.fetchone()
     conn.close()
     return row[0] if row and row[0] else None
+    
+# ------------------------------------------------------------------
+# AUDIT LOGGING HELPER
+# ------------------------------------------------------------------
+def log_audit(action, table_name, record_id, old_value=None, new_value=None):
+    """Log an action to the audit_log table."""
+    staff_id = session.get('staff_id')
+    if not staff_id:
+        return  # Skip logging if no staff logged in (shouldn't happen)
+    
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO audit_log (staff_id, action, table_name, record_id, old_value, new_value, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ''', (staff_id, action, table_name, record_id, old_value, new_value, datetime.datetime.now().isoformat()))
+    conn.commit()
+    conn.close()    
 
 # ------------------------------------------------------------------
 # DATABASE INITIALIZATION (Your existing amazing schema)
+# ------------------------------------------------------------------
+# ------------------------------------------------------------------
+# DATABASE INITIALIZATION (With NOT NULL constraints)
 # ------------------------------------------------------------------
 def init_db():
     conn = sqlite3.connect('clinic.db')
@@ -72,7 +93,7 @@ def init_db():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_staff_uuid ON staff(uuid);')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_staff_clinic ON staff(clinic_id);')
     
-    # 3. patients
+    # 3. patients (UPDATED: name NOT NULL)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS patients (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,8 +114,7 @@ def init_db():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_patients_uuid ON patients(uuid);')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_patients_clinic ON patients(clinic_id);')
     
-        # 4. appointments (NEW: Includes appointment_type)
-        # 4. appointments (Updated with new columns)
+    # 4. appointments (UPDATED: appointment_date NOT NULL)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS appointments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,7 +139,7 @@ def init_db():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_appointments_uuid ON appointments(uuid);')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_appointments_clinic ON appointments(clinic_id);')
     
-    # 5. visits (Added columns for payment channels, medical aid, and retail flag)
+    # 5. visits (UPDATED: diagnosis NOT NULL)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS visits (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -129,7 +149,7 @@ def init_db():
             doctor_id INTEGER,
             appointment_id INTEGER,
             visit_date TEXT NOT NULL,
-            diagnosis TEXT,
+            diagnosis TEXT NOT NULL,
             referral TEXT DEFAULT 'None',
             total_fee INTEGER DEFAULT 0,
             amount_paid INTEGER DEFAULT 0,
@@ -161,7 +181,7 @@ def init_db():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_visits_clinic ON visits(clinic_id);')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_visits_appointment ON visits(appointment_id);')
     
-    # 6. visit_items
+    # 6. visit_items (UPDATED: Added FOREIGN KEY for price_list_id)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS visit_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -176,7 +196,8 @@ def init_db():
             total_line_price INTEGER DEFAULT 0,
             created_at TEXT,
             is_synced INTEGER DEFAULT 0,
-            FOREIGN KEY (visit_id) REFERENCES visits (id)
+            FOREIGN KEY (visit_id) REFERENCES visits (id),
+            FOREIGN KEY (price_list_id) REFERENCES price_list (id)
         )
     ''')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_visit_items_uuid ON visit_items(uuid);')
@@ -198,7 +219,7 @@ def init_db():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_loan_payments_uuid ON loan_payments(uuid);')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_loan_payments_visit ON loan_payments(visit_id);')
     
-    # 8. inventory
+    # 8. inventory (UPDATED: item_name NOT NULL)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -243,7 +264,6 @@ def init_db():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_price_list_inventory ON price_list(inventory_id);')
     
     # 10. expenses
-        # 10. expenses (Updated with new category column)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS expenses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -261,7 +281,7 @@ def init_db():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_expenses_uuid ON expenses(uuid);')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_expenses_clinic ON expenses(clinic_id);')
     
-    # 10.5 PRICE HISTORY (NEW - ADD THIS BLOCK HERE)
+    # 10.5 PRICE HISTORY
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS price_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -471,6 +491,8 @@ def register():
         ))
         
         conn.commit()
+        log_audit('REGISTER_PATIENT', 'patients', patient_id, 
+          old_value=None, new_value=f"Name: {name}, Sex: {sex}")
         conn.close()
         
         return redirect(url_for('queue'))
@@ -857,6 +879,9 @@ def inventory():
                     cursor.execute("DELETE FROM inventory WHERE id = ?", (dup_id,))
 
             conn.commit()
+            log_audit('EDIT_INVENTORY', 'inventory', inventory_id, 
+          old_value=f"Original: {original_name}", 
+          new_value=f"New: {item_name}, Qty +{quantity}")
             conn.close()
             return redirect(url_for('inventory'))
 
@@ -886,6 +911,8 @@ def inventory():
             ''', (str(uuid.uuid4()), clinic_id, category, item_name, quantity, min_alert, expiry, datetime.datetime.now().isoformat()))
 
             conn.commit()
+            log_audit('ADD_INVENTORY', 'inventory', cursor.lastrowid, 
+          old_value=None, new_value=f"{item_name}, Qty: {quantity}")
             conn.close()
             return redirect(url_for('inventory'))
 
@@ -1111,6 +1138,9 @@ def update_price_item(item_id):
             ''', (item_id, item_type, item_name, old_price, new_price, old_qty, new_qty, session.get('staff_id'), datetime.datetime.now().isoformat()))
 
         conn.commit()
+        log_audit('UPDATE_PRICE', 'price_list', item_id, 
+          old_value=f"Price: {old_price}, Qty: {old_qty}", 
+          new_value=f"Price: {new_price}, Qty: {new_qty}")
         conn.close()
         return {'success': True}
     except Exception as e:
@@ -1125,11 +1155,18 @@ def delete_price_item(item_id):
         return redirect(url_for('setup_clinic'))
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM price_list WHERE id = ?", (item_id,))
+    # Soft delete: mark as inactive and update timestamp
+    cursor.execute('''
+        UPDATE price_list 
+        SET is_active = 0, updated_at = ? 
+        WHERE id = ?
+    ''', (datetime.datetime.now().isoformat(), item_id))
     conn.commit()
+    log_audit('DELETE_PRICE', 'price_list', item_id, 
+          old_value='Active', new_value='Deactivated (Soft Delete)')
     conn.close()
+    flash('Price item deactivated successfully. History preserved.', 'success')
     return redirect(url_for('price_list'))
-    
     
 @app.route('/price_list/history/<int:item_id>', methods=['GET'])
 def price_list_history(item_id):
@@ -1362,6 +1399,8 @@ def visit(patient_id):
         cursor.execute("UPDATE appointments SET status = 'In Progress', updated_at = ? WHERE id = ?", (now, appointment_id))
 
         conn.commit()
+        log_audit('CREATE_VISIT', 'visits', visit_id, 
+          old_value=None, new_value=f"Patient: {p_name}, Total: MK {total_fee/100}")
         conn.close()
         flash(f'Visit saved for {p_name}. Sent to cashier.', 'success')
         return redirect(url_for('queue'))
@@ -2266,7 +2305,7 @@ def finance():
     if not clinic_id:
         return redirect(url_for('setup_clinic'))
     """Finance dashboard with revenue, loans, discounts, and expenses"""
-    # Role check: only Admin, Cashier, Doctor can view finance (case-insensitive)
+    # Role check
     allowed_roles = ['admin', 'cashier', 'doctor']
     user_role = session.get('role', '').lower()
     if user_role not in allowed_roles:
@@ -2276,7 +2315,7 @@ def finance():
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
     
-    # Get date range filter from query string (default to 'today')
+    # Get date range filter
     period = request.args.get('period', 'today')
     today = datetime.date.today()
     
@@ -2292,16 +2331,9 @@ def finance():
     else:
         start_date = (today - datetime.timedelta(days=7)).isoformat() + 'T00:00:00'
         end_date = today.isoformat() + 'T23:59:59'
-        period = 'week'  # fallback
+        period = 'week'
     
-    # 1. Total Cash Collected
-    # Two sources, mutually exclusive (a visit is either fully Paid in one
-    # go, or it's/was a loan whose payments live in loan_payments):
-    #   a) Visits paid in full directly (never went through Loan Active)
-    #   b) Every loan payment recorded in loan_payments (the initial
-    #      partial payment AND every later repayment), dated by when that
-    #      specific payment actually happened -- not by the visit's
-    #      updated_at, which only reflects the most recent touch.
+    # 1. Total Cash Collected (direct visits paid in full during range)
     cursor.execute('''
         SELECT SUM(amount_paid) FROM visits 
         WHERE status = 'Paid' 
@@ -2310,6 +2342,7 @@ def finance():
     ''', (start_date, end_date))
     total_cash_direct = cursor.fetchone()[0] or 0
 
+    # 1b. Total cash from loan payments in range
     cursor.execute('''
         SELECT SUM(amount) FROM loan_payments
         WHERE payment_date >= ? AND payment_date <= ?
@@ -2318,10 +2351,7 @@ def finance():
 
     total_cash = total_cash_direct + total_cash_from_loans
     
-    # 2. Outstanding Loans (active loans, total remaining balance).
-    # Balance owed is total_fee minus any discount minus what's been
-    # paid so far -- discount_amount must be subtracted here too, or a
-    # discounted loan shows a higher "still owed" figure than is real.
+    # 2. Outstanding Loans
     cursor.execute('''
         SELECT SUM(total_fee - COALESCE(discount_amount, 0) - amount_paid) FROM visits 
         WHERE status = 'Loan Active'
@@ -2336,72 +2366,124 @@ def finance():
     ''', (start_date, end_date))
     total_discounts = cursor.fetchone()[0] or 0
     
-    # 4. Net Revenue = Total Cash collected. total_cash is already net of
-    # any discount (amount_paid / loan_payments.amount are computed as
-    # total_fee minus discount_amount at payment time), so discounts must
-    # NOT be subtracted again here -- that would double-count them.
-    # "Discounts Given" below is shown purely as an informational figure
-    # (how much revenue was forgone), not as a deduction from cash.
+    # 4. Net Revenue
     net_revenue = total_cash
     
     # 5. Total Expenses (within period)
     cursor.execute('''
         SELECT SUM(amount) FROM expenses 
         WHERE expense_date >= ? AND expense_date <= ?
-    ''', (start_date[:10], end_date[:10])) # Dates in expenses are just YYYY-MM-DD
+    ''', (start_date[:10], end_date[:10]))
     total_expenses = cursor.fetchone()[0] or 0
     
-    # 6. Net Profit (Net Revenue - Expenses)
+    # 6. Net Profit
     net_profit = net_revenue - total_expenses
     
-    # 7. Recent transactions (last 10 money-collection EVENTS within the
-    # selected period -- not last 10 visits). A visit that was paid off
-    # as a loan across several days must show up as several separate
-    # rows here, each dated by when that specific installment was
-    # actually collected, each showing only that installment's amount --
-    # not one row showing the visit's cumulative all-time total dated by
-    # whenever it was last touched. Without this, paying off the
-    # remaining MK 3000 of an old MK 6000 loan today would display as
-    # "MK 6000 paid today", silently re-counting money collected on an
-    # earlier day. This mirrors total_cash above exactly: direct full
-    # payments are one event (the visit itself); loan repayments are one
-    # event per loan_payments row.
+    # -------------------------
+    # Build grouped (per-visit) transactions with installments
+    # -------------------------
+    today_str = today.isoformat()
+    # 1) loan_payments grouped by visit_id and by DATE(payment_date)
+    #    NOTE: we keep MAX(payment_date) as a full timestamp (pay_ts) purely
+    #    for ordering -- pay_date stays a plain date for display/grouping.
     cursor.execute('''
-        SELECT
-            patients.name,
-            visits.updated_at AS event_date,
-            visits.total_fee,
-            visits.amount_paid AS event_amount,
-            visits.discount_amount,
-            visits.status,
-            visits.is_retail
-        FROM visits
-        LEFT JOIN patients ON visits.patient_id = patients.id
-        WHERE visits.status = 'Paid'
-          AND visits.id NOT IN (SELECT DISTINCT visit_id FROM loan_payments)
-          AND visits.updated_at >= ? AND visits.updated_at <= ?
-
-        UNION ALL
-
-        SELECT
-            patients.name,
-            loan_payments.payment_date AS event_date,
-            visits.total_fee,
-            loan_payments.amount AS event_amount,
-            visits.discount_amount,
-            visits.status,
-            visits.is_retail
+        SELECT visit_id, DATE(payment_date) AS pay_date, SUM(amount) AS amount_sum,
+               MAX(payment_date) AS pay_ts
         FROM loan_payments
-        JOIN visits ON loan_payments.visit_id = visits.id
-        LEFT JOIN patients ON visits.patient_id = patients.id
-        WHERE loan_payments.payment_date >= ? AND loan_payments.payment_date <= ?
-
-        ORDER BY event_date DESC
-        LIMIT 10
-    ''', (start_date, end_date, start_date, end_date))
-    recent_transactions = cursor.fetchall()
+        WHERE payment_date >= ? AND payment_date <= ?
+        GROUP BY visit_id, DATE(payment_date)
+    ''', (start_date, end_date))
+    loan_grouped = cursor.fetchall()  # list of (visit_id, pay_date, amount_sum, pay_ts)
     
-    # 8. Recent expenses (last 10 within selected period)
+    # 2) direct visit payments (visits fully paid in the period and not in loan_payments)
+    cursor.execute('''
+        SELECT id AS visit_id, DATE(updated_at) AS pay_date, amount_paid AS amount_sum,
+               updated_at AS pay_ts
+        FROM visits
+        WHERE status = 'Paid'
+          AND id NOT IN (SELECT DISTINCT visit_id FROM loan_payments)
+          AND updated_at >= ? AND updated_at <= ?
+    ''', (start_date, end_date))
+    direct_grouped = cursor.fetchall()
+    
+    # Combine into per-visit installments map
+    from collections import defaultdict
+    installments_map = defaultdict(list)  # visit_id -> list of {date, amount, ts}
+    
+    for visit_id, pay_date, amount_sum, pay_ts in loan_grouped:
+        if pay_date:
+            installments_map[visit_id].append({'date': pay_date, 'amount': amount_sum, 'ts': pay_ts})
+    for visit_id, pay_date, amount_sum, pay_ts in direct_grouped:
+        if pay_date:
+            installments_map[visit_id].append({'date': pay_date, 'amount': amount_sum, 'ts': pay_ts})
+    
+    # Build grouped_transactions, limit 10 by most recent payment date (prefer visits with payments today)
+    grouped_transactions = []
+    if installments_map:
+        visit_latest = []
+        for vid, insts in installments_map.items():
+            # Sort installments by full timestamp desc (newest first)
+            insts_sorted = sorted(insts, key=lambda x: x['ts'], reverse=True)
+            installments_map[vid] = insts_sorted
+            latest_date = insts_sorted[0]['date']
+            latest_amount = insts_sorted[0]['amount']
+            latest_ts = insts_sorted[0]['ts']
+            # sum of installments with date == today
+            today_total = sum(inst['amount'] for inst in insts_sorted if inst['date'] == today_str)
+            # We'll choose a summary per-visit later (prefer today's total if present)
+            visit_latest.append((vid, latest_date, latest_amount, today_total, latest_ts))
+        
+        # Order by full timestamp DESC (true newest-first, no day-level ties) and keep top 10
+        visit_latest.sort(key=lambda x: x[4], reverse=True)
+        top_visits = visit_latest[:10]
+        top_visit_ids = [v[0] for v in top_visits]
+        
+        # Fetch visit metadata including amount_paid so we can compute outstanding
+        if top_visit_ids:
+            qmarks = ','.join(['?'] * len(top_visit_ids))
+            cursor.execute(f'''
+                SELECT visits.id, visits.total_fee, visits.amount_paid, visits.discount_amount, visits.status, visits.is_retail, patients.name
+                FROM visits
+                LEFT JOIN patients ON visits.patient_id = patients.id
+                WHERE visits.id IN ({qmarks})
+            ''', top_visit_ids)
+            visit_rows = cursor.fetchall()
+            visits_by_id = {r[0]: r for r in visit_rows}
+            
+            for vid, latest_date, latest_amount, today_total, latest_ts in top_visits:
+                vrow = visits_by_id.get(vid)
+                if vrow:
+                    # Choose summary: prefer today's total when present, otherwise latest
+                    if today_total and today_total > 0:
+                        summary_date = today_str
+                        summary_amount = today_total
+                    else:
+                        summary_date = latest_date
+                        summary_amount = latest_amount
+
+                    total_fee = vrow[1] or 0
+                    amount_paid = vrow[2] or 0
+                    discount_amount = vrow[3] or 0
+                    outstanding = max(0, total_fee - discount_amount - amount_paid)
+
+                    grouped_transactions.append({
+                        'visit_id': vrow[0],
+                        'patient': vrow[6] or '🏪 Retail Sale',
+                        'summary_date': summary_date,
+                        'summary_amount': summary_amount,
+                        'latest_date': latest_date,
+                        'latest_amount': latest_amount,
+                        'today_total': today_total,
+                        'total_fee': total_fee,
+                        'amount_paid': amount_paid,
+                        'discount_amount': discount_amount,
+                        'outstanding': outstanding,
+                        'status': vrow[4] or '',
+                        'is_retail': vrow[5] or 0,
+                        'installments': installments_map.get(vid, [])
+                    })
+    
+    # 7. Recent expenses (last 10 within selected period)
     cursor.execute('''
         SELECT id, expense_date, category, description, amount
         FROM expenses
@@ -2422,9 +2504,10 @@ def finance():
         net_revenue=net_revenue,
         total_expenses=total_expenses,
         net_profit=net_profit,
-        recent_transactions=recent_transactions,
+        grouped_transactions=grouped_transactions,
         recent_expenses=recent_expenses,
-        role=session.get('role')
+        role=session.get('role'),
+        today_str=today_str  # <-- Add this for template to show "Today" text
     )
 
 
@@ -2524,6 +2607,8 @@ def add_staff():
             VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', (str(uuid.uuid4()), clinic_id, full_name, role, username, hashed_pw, datetime.datetime.now().isoformat()))
         conn.commit()
+        log_audit('ADD_STAFF', 'staff', cursor.lastrowid, 
+          old_value=None, new_value=f"Role: {role}, Username: {username}")
         conn.close()
         return {'success': True}
     except sqlite3.IntegrityError:
@@ -2574,6 +2659,9 @@ def edit_staff():
             ''', (full_name, role, username, datetime.datetime.now().isoformat(), staff_id, clinic_id))
         
         conn.commit()
+        log_audit('EDIT_STAFF', 'staff', staff_id, 
+          old_value=f"Name: {full_name}, Role: {role}", 
+          new_value=f"Updated details")
         conn.close()
         return {'success': True}
     except sqlite3.IntegrityError:
@@ -2607,6 +2695,8 @@ def deactivate_staff(staff_id):
         WHERE id = ? AND clinic_id = ?
     ''', (datetime.datetime.now().isoformat(), staff_id, clinic_id))
     conn.commit()
+    log_audit('DEACTIVATE_STAFF', 'staff', staff_id, 
+          old_value='Active', new_value='Deactivated')
     conn.close()
     return {'success': True}
 
@@ -2630,6 +2720,8 @@ def reactivate_staff(staff_id):
         WHERE id = ? AND clinic_id = ?
     ''', (datetime.datetime.now().isoformat(), staff_id, clinic_id))
     conn.commit()
+    log_audit('REACTIVATE_STAFF', 'staff', staff_id, 
+          old_value='Inactive', new_value='Reactivated')
     conn.close()
     return {'success': True}    
     
@@ -2684,8 +2776,44 @@ def dashboard():
 
     total_queue_count = waiting_count + pending_count
 
-    # "Seen Today" has no real data source yet
-    seen_today_count = 0
+    # --- FIXED: "Seen Today" (Consultation + Retail + Old Loan Repayments) ---
+    today = datetime.date.today()
+    today_start = today.isoformat() + 'T00:00:00'
+    today_end = today.isoformat() + 'T23:59:59'
+
+    cursor.execute('''
+        SELECT COUNT(DISTINCT unique_id) FROM (
+            -- 1. Consultation visits started today (includes Paid, Ready, Loan Active)
+            SELECT id AS unique_id
+            FROM visits
+            WHERE clinic_id = ? 
+            AND visit_date >= ? AND visit_date <= ?
+            AND (is_retail IS NULL OR is_retail = 0)
+            
+            UNION
+            
+            -- 2. Retail sales created today
+            SELECT id AS unique_id
+            FROM visits
+            WHERE clinic_id = ? 
+            AND visit_date >= ? AND visit_date <= ?
+            AND is_retail = 1
+            
+            UNION
+            
+            -- 3. Loan payments made today on OLDER visits (visit created before today)
+            SELECT loan_payments.visit_id AS unique_id
+            FROM loan_payments
+            JOIN visits ON loan_payments.visit_id = visits.id
+            WHERE visits.clinic_id = ? 
+            AND loan_payments.payment_date >= ? AND loan_payments.payment_date <= ?
+            AND visits.visit_date < ?
+        )
+    ''', (clinic_id, today_start, today_end, 
+          clinic_id, today_start, today_end, 
+          clinic_id, today_start, today_end, today_start))
+
+    seen_today_count = cursor.fetchone()[0] or 0
 
     # --- Inventory stats ---
     cursor.execute("SELECT COUNT(*) FROM inventory WHERE clinic_id = ? AND is_active = 1", (clinic_id,))
@@ -2694,7 +2822,6 @@ def dashboard():
     cursor.execute("SELECT COUNT(*) FROM inventory WHERE clinic_id = ? AND is_active = 1 AND quantity <= min_alert_level", (clinic_id,))
     low_stock_count = cursor.fetchone()[0]
 
-    today = datetime.date.today()
     cutoff = (today + datetime.timedelta(days=14)).isoformat()
     cursor.execute(
         "SELECT COUNT(*) FROM inventory WHERE clinic_id = ? AND is_active = 1 AND expiry_date IS NOT NULL AND expiry_date <= ? AND expiry_date >= ?",
@@ -2715,18 +2842,6 @@ def dashboard():
     loans_count = cursor.fetchone()[0]
 
     # --- Total Cash Collected TODAY ---
-    # Mirrors finance()'s total_cash calculation. Money collected today
-    # comes from two mutually-exclusive sources:
-    #   a) Visits paid in full directly, that never touched loan_payments
-    #   b) Every loan_payments row dated today (a loan's initial partial
-    #      payment, or any later repayment) -- dated by when that
-    #      specific payment happened, not by the visit's updated_at,
-    #      which only reflects the most recent touch to the visit.
-    # The previous version only summed (a), so any money collected via
-    # a loan repayment today was invisible here even though finance()
-    # counted it correctly -- that's why the two pages disagreed.
-    today_start = today.isoformat() + 'T00:00:00'
-    today_end = today.isoformat() + 'T23:59:59'
     cursor.execute('''
         SELECT SUM(amount_paid) FROM visits 
         WHERE clinic_id = ?
@@ -2781,6 +2896,33 @@ def about():
 def contact():
     """Display the Contact Us page."""
     return render_template('contact.html', role=session.get('role'))
+    
+    
+@app.route('/audit_log')
+def view_audit_log():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
+    
+    # Only Admin can view audit logs
+    if session.get('role', '').lower() != 'admin':
+        flash('Permission denied.', 'danger')
+        return redirect(url_for('dashboard'))
+    
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT audit_log.id, staff.full_name, audit_log.action, audit_log.table_name, 
+               audit_log.record_id, audit_log.old_value, audit_log.new_value, audit_log.timestamp
+        FROM audit_log
+        LEFT JOIN staff ON audit_log.staff_id = staff.id
+        ORDER BY audit_log.timestamp DESC
+        LIMIT 50
+    ''')
+    logs = cursor.fetchall()
+    conn.close()
+    
+    return render_template('audit_log.html', logs=logs, role=session.get('role'))    
     
 # ------------------------------------------------------------------
 # RUN THE APP

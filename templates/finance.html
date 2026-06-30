@@ -84,56 +84,108 @@
         <!-- Recent Transactions & Expenses -->
         <div class="row">
             <div class="col-md-7">
-                <div class="card shadow-sm">
-                    <div class="card-header bg-dark text-white">
-                        <h6 class="mb-0">Transactions ({{ period|capitalize }})</h6>
-                    </div>
-                    <div class="card-body p-0">
-                        <div class="table-responsive">
-                            <table class="table table-sm table-striped mb-0">
-                                <thead>
-                                    <tr>
-                                        <th>Patient</th>
-                                        <th>Date</th>
-                                        <th class="text-end">Visit Total</th>
-                                        <th class="text-end">Collected</th>
-                                        <th class="text-end">Discount</th>
-                                        <th>Status</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {% for txn in recent_transactions %}
-                                    <tr>
-                                        <td>
-    <strong>
-        {% if txn[0] %}
-            {{ txn[0] }}
-        {% else %}
-            🏪 Retail Sale
-        {% endif %}
-    </strong>
-</td>
-                                        <td><small>{{ txn[1][:10] if txn[1] else 'Just now' }}</small></td>
-                                        <td class="text-end">MK {{ "%.2f"|format(txn[2] / 100) }}</td>
-                                        <td class="text-end">MK {{ "%.2f"|format(txn[3] / 100) }}</td>
-                                        <td class="text-end">MK {{ "%.2f"|format(txn[4] / 100) }}</td>
-                                        <td>
-                                            <span class="badge {{ 'bg-success' if txn[5] == 'Paid' else 'bg-info text-dark' }}">
-                                                {{ txn[5] }}
-                                            </span>
-                                        </td>
-                                    </tr>
-                                    {% else %}
-                                    <tr>
-                                        <td colspan="6" class="text-center text-muted py-3">No transactions yet.</td>
-                                    </tr>
-                                    {% endfor %}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
+    <div class="card shadow-sm">
+        <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+            <h6 class="mb-0">Transactions ({{ period|capitalize }})</h6>
+            <small class="text-muted">Showing up to 10 most recent visits with payments</small>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-sm table-striped mb-0">
+                    <thead>
+                        <tr>
+                            <th>Patient</th>
+                            <th>Summary (Date & Amount)</th>
+                            <th class="text-end">Visit Total</th>
+                            <th class="text-end">Outstanding</th>
+                            <th>Status</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% if grouped_transactions %}
+                            {% for gt in grouped_transactions %}
+                                <tr class="main-row">
+                                    <td>
+                                        <strong>{{ gt.patient }}</strong>
+                                        {% if gt.discount_amount > 0 %}
+                                            <br><small class="text-muted">Discount: MK {{ "%.2f"|format(gt.discount_amount / 100) }}</small>
+                                        {% endif %}
+                                        {% if gt.is_retail %}
+                                            <span class="badge bg-success ms-1">Retail</span>
+                                        {% endif %}
+                                    </td>
+
+                                    <!-- Summary column: server chooses summary_date/summary_amount (prefers today's sum) -->
+                                    <td>
+                                        <small>
+                                            {% if gt.summary_date == today_str %}
+                                                <span class="text-success fw-bold">Today</span>
+                                            {% else %}
+                                                {{ gt.summary_date }}
+                                            {% endif %}
+                                        </small>
+                                        <br><small class="text-muted">MK {{ "%.2f"|format(gt.summary_amount / 100) }}</small>
+                                    </td>
+
+                                    <td class="text-end">MK {{ "%.2f"|format(gt.total_fee / 100) }}</td>
+                                    <td class="text-end text-danger fw-bold">MK {{ "%.2f"|format(gt.outstanding / 100) }}</td>
+
+                                    <td>
+                                        <span class="badge {{ 'bg-success' if gt.status == 'Paid' else 'bg-info text-dark' }}">
+                                            {{ gt.status }}
+                                        </span>
+                                    </td>
+
+                                    <td class="text-end">
+                                        <div class="d-flex justify-content-end gap-2">
+                                            {% if gt.status == 'Loan Active' %}
+                                                <a href="/cashier/loan/{{ gt.visit_id }}" class="btn btn-outline-primary btn-sm">View Loan</a>
+                                            {% endif %}
+                                            <button type="button" class="btn btn-outline-secondary btn-sm toggle-installments" data-target="#inst-{{ gt.visit_id }}">
+                                                ▾ Installments
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+
+                                <tr id="inst-{{ gt.visit_id }}" class="installments-row" style="display: none; background: rgba(0,0,0,0.02);">
+                                    <td colspan="6" style="padding: .5rem 1rem;">
+                                        <div class="small">
+                                            <strong>Payment History</strong>
+                                            <div class="table-responsive mt-2">
+                                                <table class="table table-sm mb-0">
+                                                    <thead>
+                                                        <tr>
+                                                            <th>Date</th>
+                                                            <th class="text-end">Amount</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {% for inst in gt.installments %}
+                                                            <tr>
+                                                                <td><small>{{ inst.date }}</small></td>
+                                                                <td class="text-end">MK {{ "%.2f"|format(inst.amount / 100) }}</td>
+                                                            </tr>
+                                                        {% endfor %}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        {% else %}
+                            <tr>
+                                <td colspan="6" class="text-center text-muted py-3">No transactions in this period.</td>
+                            </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
             </div>
+        </div>
+    </div>
+</div>
 
             <div class="col-md-5">
                 <div class="card shadow-sm">
@@ -211,4 +263,21 @@
         </div>
     </div>
 </div>
+
+<!-- Toggle JS (allow multiple open) -->
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('.toggle-installments').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var target = document.querySelector(this.getAttribute('data-target'));
+            if (!target) return;
+            if (target.style.display === 'none' || target.style.display === '') {
+                target.style.display = 'table-row';
+            } else {
+                target.style.display = 'none';
+            }
+        });
+    });
+});
+</script>
 {% endblock %}

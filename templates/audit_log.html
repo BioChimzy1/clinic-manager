@@ -1,0 +1,40 @@
+{% extends 'layout.html' %}
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h3 class="mb-3">📋 Audit Log</h3>
+        <div class="table-responsive">
+            <table class="table table-sm table-striped">
+                <thead class="table-dark">
+                    <tr>
+                        <th>Time</th>
+                        <th>Staff</th>
+                        <th>Action</th>
+                        <th>Table</th>
+                        <th>Record ID</th>
+                        <th>Old Value</th>
+                        <th>New Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in logs %}
+                    <tr>
+                        <td><small>{{ log[7][:16] }}</small></td>
+                        <td><small>{{ log[1] or 'System' }}</small></td>
+                        <td><span class="badge bg-info text-dark">{{ log[2] }}</span></td>
+                        <td><small>{{ log[3] }}</small></td>
+                        <td><small>{{ log[4] }}</small></td>
+                        <td><small class="text-muted">{{ log[5] or '—' }}</small></td>
+                        <td><small class="text-success">{{ log[6] or '—' }}</small></td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="7" class="text-center text-muted">No audit logs yet.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
