@@ -1,3 +1,5 @@
 clinic.db
 __pycache__/
 *.pyc
+clinic_backup_*.db
+*.db
