@@ -46,12 +46,14 @@ def log_audit(action, table_name, record_id, old_value=None, new_value=None):
     if not staff_id:
         return  # Skip logging if no staff logged in (shouldn't happen)
     
+    clinic_id = get_current_clinic_id()
+    
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO audit_log (staff_id, action, table_name, record_id, old_value, new_value, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    ''', (staff_id, action, table_name, record_id, old_value, new_value, datetime.datetime.now().isoformat()))
+        INSERT INTO audit_log (staff_id, clinic_id, action, table_name, record_id, old_value, new_value, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (staff_id, clinic_id, action, table_name, record_id, old_value, new_value, datetime.datetime.now().isoformat()))
     conn.commit()
     conn.close()    
 
@@ -330,19 +332,38 @@ def init_db():
     
     # 11. audit_log
     cursor.execute('''
+
         CREATE TABLE IF NOT EXISTS audit_log (
+
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+
             staff_id INTEGER,
+
+            clinic_id INTEGER,
+
             action TEXT NOT NULL,
+
             table_name TEXT NOT NULL,
+
             record_id INTEGER NOT NULL,
+
             old_value TEXT,
+
             new_value TEXT,
+
             timestamp TEXT,
-            FOREIGN KEY (staff_id) REFERENCES staff (id)
+
+            FOREIGN KEY (staff_id) REFERENCES staff (id),
+
+            FOREIGN KEY (clinic_id) REFERENCES clinics (id)
+
         )
+
     ''')
+
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_audit_log_staff ON audit_log(staff_id);')
+
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_audit_log_clinic ON audit_log(clinic_id);')
     
     # --------------------------------------------------------------
     # AUTO-CREATE DEFAULT ADMIN IF NO STAFF EXISTS
@@ -2924,8 +2945,7 @@ def edit_staff():
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
     
-    # Make sure this staff member actually belongs to the current clinic —
-    # otherwise an Admin could edit someone at a clinic they don't manage.
+    # Make sure this staff member actually belongs to the current clinic
     cursor.execute('''
         SELECT 1 FROM staff_clinics WHERE staff_id = ? AND clinic_id = ?
     ''', (staff_id, clinic_id))
@@ -2934,6 +2954,22 @@ def edit_staff():
         return {'success': False, 'error': 'This staff member is not part of your clinic.'}
     
     try:
+        # Fetch OLD values for audit logging
+        cursor.execute('''
+            SELECT full_name, username, role FROM staff WHERE id = ?
+        ''', (staff_id,))
+        old_staff = cursor.fetchone()
+        
+        cursor.execute('''
+            SELECT role FROM staff_clinics WHERE staff_id = ? AND clinic_id = ?
+        ''', (staff_id, clinic_id))
+        old_clinic_role = cursor.fetchone()
+        
+        old_full_name = old_staff[0] if old_staff else 'Unknown'
+        old_username = old_staff[1] if old_staff else 'Unknown'
+        old_global_role = old_staff[2] if old_staff else 'Unknown'
+        old_clinic_role_val = old_clinic_role[0] if old_clinic_role else 'Unknown'
+        
         if password:
             # Update with new password
             hashed_pw = generate_password_hash(password)
@@ -2954,9 +2990,22 @@ def edit_staff():
         ''', (role, staff_id, clinic_id))
         
         conn.commit()
-        log_audit('EDIT_STAFF', 'staff', staff_id, 
-          old_value=f"Name: {full_name}, Role: {role}", 
-          new_value=f"Updated details")
+        
+        # Build detailed audit diff
+        audit_parts = []
+        if old_full_name != full_name:
+            audit_parts.append(f"Name: '{old_full_name}' → '{full_name}'")
+        if old_username != username:
+            audit_parts.append(f"Username: '{old_username}' → '{username}'")
+        if old_clinic_role_val != role:
+            audit_parts.append(f"Role (this clinic): '{old_clinic_role_val}' → '{role}'")
+        if password:
+            audit_parts.append("Password: RESET")
+        
+        log_audit('EDIT_STAFF', 'staff', staff_id,
+          old_value=", ".join(audit_parts) if audit_parts else "No changes",
+          new_value="Updated details")
+        
         conn.close()
         return {'success': True}
     except sqlite3.IntegrityError:
@@ -3224,21 +3273,24 @@ def view_audit_log():
         return redirect(url_for('dashboard'))
     
     conn = sqlite3.connect('clinic.db')
+    conn.row_factory = sqlite3.Row  # <--- THIS is the magic line!
     cursor = conn.cursor()
+    
     cursor.execute('''
         SELECT audit_log.id, staff.full_name, audit_log.action, audit_log.table_name, 
                audit_log.record_id, audit_log.old_value, audit_log.new_value, audit_log.timestamp
         FROM audit_log
         LEFT JOIN staff ON audit_log.staff_id = staff.id
-        JOIN staff_clinics ON staff.id = staff_clinics.staff_id
-        WHERE staff_clinics.clinic_id = ?
+        WHERE audit_log.clinic_id = ?
         ORDER BY audit_log.timestamp DESC
         LIMIT 50
     ''', (clinic_id,))
-    logs = cursor.fetchall()
+    
+    # Convert sqlite3.Row objects to dicts so HTML can use keys
+    logs = [dict(row) for row in cursor.fetchall()]
     conn.close()
     
-    return render_template('audit_log.html', logs=logs, role=session.get('role'))    
+    return render_template('audit_log.html', logs=logs, role=session.get('role'))   
     
 # ------------------------------------------------------------------
 # RUN THE APP
