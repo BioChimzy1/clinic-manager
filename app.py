@@ -17,25 +17,24 @@ app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 # HELPER FUNCTION
 # ------------------------------------------------------------------
 def get_current_clinic_id():
-    """Returns the clinic_id of the currently logged-in staff member.
-    Reads from session cache first (set at login) to avoid a DB hit on
-    every request. Falls back to a DB lookup for any request that arrives
-    without the cache (e.g. session created before this change was deployed).
-    """
     cached = session.get('clinic_id')
     if cached:
         return cached
     staff_id = session.get('staff_id')
     if not staff_id:
         return None
+    
+    # Fallback: If session['clinic_id'] is missing, pick their first clinic
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT clinic_id FROM staff WHERE id = ? AND is_active = 1", (staff_id,))
+    cursor.execute('''
+        SELECT clinic_id FROM staff_clinics WHERE staff_id = ? LIMIT 1
+    ''', (staff_id,))
     row = cursor.fetchone()
     conn.close()
-    clinic_id = row[0] if row and row[0] else None
+    clinic_id = row[0] if row else None
     if clinic_id:
-        session['clinic_id'] = clinic_id  # warm the cache
+        session['clinic_id'] = clinic_id
     return clinic_id
     
 # ------------------------------------------------------------------
@@ -84,25 +83,43 @@ def init_db():
     ''')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_clinics_uuid ON clinics(uuid);')
     
-    # 2. staff
+    # 2. staff (Removed clinic_id, UNIQUE is now just username)
+    # NOTE: 'role' here is the staff member's home/default role (used before a
+    # clinic is selected, and as the initial value when they're first added).
+    # The AUTHORITATIVE role for permission checks inside a clinic is
+    # staff_clinics.role, since the same person can hold different roles
+    # at different clinics.
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS staff (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            uuid TEXT UNIQUE,
-            clinic_id INTEGER,
-            full_name TEXT NOT NULL,
-            role TEXT NOT NULL,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            is_active INTEGER DEFAULT 1,
-            created_at TEXT,
-            updated_at TEXT,
-            is_synced INTEGER DEFAULT 0,
-            FOREIGN KEY (clinic_id) REFERENCES clinics (id)
-        )
-    ''')
+    CREATE TABLE IF NOT EXISTS staff (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid TEXT UNIQUE,
+        full_name TEXT NOT NULL,
+        role TEXT NOT NULL,
+        username TEXT UNIQUE NOT NULL,  -- Back to global unique (or keep per-clinic if you prefer)
+        password_hash TEXT NOT NULL,
+        is_active INTEGER DEFAULT 1,
+        created_at TEXT,
+        updated_at TEXT,
+        is_synced INTEGER DEFAULT 0
+    )
+''')
+
+    # 2.5 staff_clinics (The new junction table, now with a per-clinic role)
+
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS staff_clinics (
+        staff_id INTEGER NOT NULL,
+        clinic_id INTEGER NOT NULL,
+        role TEXT NOT NULL DEFAULT 'Doctor',
+        FOREIGN KEY (staff_id) REFERENCES staff (id),
+        FOREIGN KEY (clinic_id) REFERENCES clinics (id),
+        PRIMARY KEY (staff_id, clinic_id)
+    )
+''')
+
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_staff_uuid ON staff(uuid);')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_staff_clinic ON staff(clinic_id);')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_staff_clinics_staff ON staff_clinics(staff_id);')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_staff_clinics_clinic ON staff_clinics(clinic_id);')
     
     # 3. patients (UPDATED: name NOT NULL)
     cursor.execute('''
@@ -340,11 +357,10 @@ def init_db():
         hashed_pw = generate_password_hash(default_password)
 
         cursor.execute('''
-            INSERT INTO staff (uuid, clinic_id, full_name, role, username, password_hash, is_active, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO staff (uuid, full_name, role, username, password_hash, is_active, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', (
             str(uuid.uuid4()),
-            None,  # No clinic yet; the setup page will assign one
             "System Administrator",
             "Admin",
             default_username,
@@ -390,20 +406,45 @@ def login():
         
         conn = sqlite3.connect('clinic.db')
         cursor = conn.cursor()
-        cursor.execute("SELECT id, role, password_hash, clinic_id FROM staff WHERE username = ? AND is_active = 1", (username,))
+        
+        # 1. Get the staff member (no clinic_id check)
+        cursor.execute("SELECT id, role, password_hash FROM staff WHERE username = ? AND is_active = 1", (username,))
         user = cursor.fetchone()
         conn.close()
         
         if user and check_password_hash(user[2], password):
             session['staff_id'] = user[0]
-            session['role'] = user[1]
-            session['clinic_id'] = user[3]  # cache to avoid per-request DB lookups
+            session['role'] = user[1]  # home/default role, may be overridden below
             
-            # Redirect to setup if they have no clinic
-            if not user[3] or user[3] == 0:
-                return redirect(url_for('setup_clinic'))
+            # 2. Fetch all clinics this staff belongs to, WITH their role at each one
+            conn = sqlite3.connect('clinic.db')
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT clinics.id, clinics.clinic_name, staff_clinics.role
+                FROM clinics
+                JOIN staff_clinics ON clinics.id = staff_clinics.clinic_id
+                WHERE staff_clinics.staff_id = ?
+            ''', (session['staff_id'],))
+            clinics = cursor.fetchall()
+            conn.close()
             
-            return redirect(url_for('dashboard'))
+            session['user_clinics'] = clinics  # Store list of (id, name, role)
+            
+            # If they have 0 clinics, redirect to select_clinic with a message
+            if len(clinics) == 0:
+                flash('You are not assigned to any clinic. Please set up a new clinic or contact an admin.', 'warning')
+                return redirect(url_for('select_clinic'))
+            
+            # If they have exactly 1 clinic, auto-select it (role comes from staff_clinics)
+            if len(clinics) == 1:
+                session['clinic_id'] = clinics[0][0]
+                session['clinic_name'] = clinics[0][1]
+                session['role'] = clinics[0][2]
+                return redirect(url_for('dashboard'))
+            
+            # If they have multiple, redirect them to choose
+            return redirect(url_for('select_clinic'))
+            
         return render_template('login.html', error='Invalid username or password')
     return render_template('login.html')
 
@@ -418,9 +459,9 @@ def setup_clinic():
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
     
-    cursor.execute("SELECT clinic_id FROM staff WHERE id = ?", (session['staff_id'],))
+    cursor.execute("SELECT 1 FROM staff_clinics WHERE staff_id = ? LIMIT 1", (session['staff_id'],))
     existing = cursor.fetchone()
-    if existing and existing[0]:
+    if existing:
         conn.close()
         flash('You already have a clinic assigned. Welcome back!', 'info')
         return redirect(url_for('dashboard'))
@@ -443,19 +484,108 @@ def setup_clinic():
         
         clinic_id = cursor.lastrowid
         
+        # Whoever creates a clinic is always its Admin, regardless of their home role
         cursor.execute('''
-            UPDATE staff SET clinic_id = ?, updated_at = ? WHERE id = ?
-        ''', (clinic_id, datetime.datetime.now().isoformat(), session['staff_id']))
+            INSERT INTO staff_clinics (staff_id, clinic_id, role)
+            VALUES (?, ?, ?)
+        ''', (session['staff_id'], clinic_id, 'Admin'))
         
         conn.commit()
         conn.close()
-        
-        session['clinic_id'] = clinic_id  # warm session cache for new clinic
+        # Update the session for the newly created (and now active) clinic
+        session['clinic_id'] = clinic_id
+        session['clinic_name'] = clinic_name
+        session['role'] = 'Admin'
+        session['user_clinics'] = session.get('user_clinics', []) + [(clinic_id, clinic_name, 'Admin')]
         flash(f'Clinic "{clinic_name}" created successfully! You are now the Admin.', 'success')
         return redirect(url_for('dashboard'))
     
     conn.close()
     return render_template('setup_clinic.html')
+    
+@app.route('/create_clinic', methods=['POST'])
+def create_clinic():
+    """Admin-only: Create a new clinic and assign the current admin to it."""
+    # Even if they don't have a clinic yet, we check their role via session
+    if session.get('role', '').lower() != 'admin':
+        flash('Only Admins can create new clinics.', 'danger')
+        return redirect(url_for('dashboard'))
+    
+    clinic_name = request.form.get('clinic_name', '').strip()
+    phone = request.form.get('phone', '').strip()
+    
+    if not clinic_name:
+        flash('Clinic name is required.', 'danger')
+        return redirect(url_for('dashboard'))
+    
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        INSERT INTO clinics (uuid, clinic_name, phone, created_at)
+        VALUES (?, ?, ?, ?)
+    ''', (str(uuid.uuid4()), clinic_name, phone, datetime.datetime.now().isoformat()))
+    
+    new_clinic_id = cursor.lastrowid
+    
+    # Assign the current admin as Admin of this new clinic too
+    cursor.execute('''
+        INSERT INTO staff_clinics (staff_id, clinic_id, role)
+        VALUES (?, ?, ?)
+    ''', (session['staff_id'], new_clinic_id, 'Admin'))
+    
+    conn.commit()
+    conn.close()
+    
+    # Update session with the new clinic in the list
+    current_clinics = session.get('user_clinics', [])
+    session['user_clinics'] = current_clinics + [(new_clinic_id, clinic_name, 'Admin')]
+    
+    flash(f'Clinic "{clinic_name}" created successfully! Use the clinic switcher to switch to it.', 'success')
+    return redirect(url_for('dashboard'))    
+    
+@app.route('/select_clinic', methods=['GET', 'POST'])
+def select_clinic():
+    """Allow a staff member to choose which clinic to operate in for this session."""
+    if 'staff_id' not in session:
+        return redirect(url_for('login'))
+    
+    # GET request: quick switch via ?clinic_id=123 from the navbar
+    if request.method == 'GET':
+        clinic_id = request.args.get('clinic_id')
+        if clinic_id:
+            # Verify they are actually allowed to work in this clinic
+            clinics = session.get('user_clinics', [])
+            match = next((c for c in clinics if c[0] == int(clinic_id)), None)
+            if match:
+                session['clinic_id'] = match[0]
+                session['clinic_name'] = match[1]
+                session['role'] = match[2]
+                flash(f'Switched to clinic.', 'info')
+                return redirect(url_for('dashboard'))
+            else:
+                flash('Invalid clinic selection.', 'danger')
+    
+    clinics = session.get('user_clinics', [])
+    
+    # If they have 0 clinics, show a special message
+    if not clinics:
+        flash('You are not assigned to any clinic. Please set up a new clinic below.', 'warning')
+        return render_template('select_clinic.html', clinics=clinics, no_clinics=True)
+    
+    if request.method == 'POST':
+        clinic_id = request.form.get('clinic_id')
+        # Verify they are actually allowed to work in this clinic
+        match = next((c for c in clinics if c[0] == int(clinic_id)), None)
+        if match:
+            session['clinic_id'] = match[0]
+            session['clinic_name'] = match[1]
+            session['role'] = match[2]
+            return redirect(url_for('dashboard'))
+        else:
+            flash('Invalid clinic selection.', 'danger')
+    
+    return render_template('select_clinic.html', clinics=clinics, no_clinics=False)
 
 # ------------------------------------------------------------------
 # PATIENT REGISTRATION (Walk-In OR Appointment)
@@ -1228,7 +1358,13 @@ def api_staff_list():
         return {'error': 'No clinic'}, 403
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT id, full_name FROM staff WHERE clinic_id = ? AND is_active = 1 ORDER BY full_name", (clinic_id,))
+    cursor.execute('''
+        SELECT staff.id, staff.full_name
+        FROM staff
+        JOIN staff_clinics ON staff.id = staff_clinics.staff_id
+        WHERE staff_clinics.clinic_id = ? AND staff.is_active = 1
+        ORDER BY staff.full_name
+    ''', (clinic_id,))
     staff = cursor.fetchall()
     conn.close()
     return {'staff': [{'id': s[0], 'name': s[1]} for s in staff]}    
@@ -2676,7 +2812,14 @@ def delete_expense(expense_id):
 # ------------------------------------------------------------------
 @app.route('/staff/add', methods=['POST'])
 def add_staff():
-    """Add a new staff member to the current clinic"""
+    """Add a staff member to the current clinic.
+
+    If the username already belongs to an existing staff account (i.e. this
+    person already works at another clinic), that existing account is linked
+    to this clinic with the role given here — it is NOT duplicated. This is
+    how a staff member ends up working at more than one clinic, each with
+    its own role.
+    """
     clinic_id = get_current_clinic_id()
     if not clinic_id:
         return {'success': False, 'error': 'No clinic selected.'}
@@ -2691,26 +2834,67 @@ def add_staff():
     username = request.form.get('username', '').strip()
     password = request.form.get('password', '').strip()
     
-    if not full_name or not role or not username or not password:
-        return {'success': False, 'error': 'All fields are required.'}
+    if not full_name or not role or not username:
+        return {'success': False, 'error': 'Name, role, and username are required.'}
     
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
     
     try:
+        # Is this username an existing staff account (e.g. already working at another clinic)?
+        cursor.execute("SELECT id FROM staff WHERE username = ?", (username,))
+        existing = cursor.fetchone()
+        
+        if existing:
+            new_staff_id = existing[0]
+            
+            # Already linked to this clinic?
+            cursor.execute('''
+                SELECT 1 FROM staff_clinics WHERE staff_id = ? AND clinic_id = ?
+            ''', (new_staff_id, clinic_id))
+            if cursor.fetchone():
+                conn.close()
+                return {'success': False, 'error': 'This staff member is already assigned to your clinic.'}
+            
+            cursor.execute('''
+                INSERT INTO staff_clinics (staff_id, clinic_id, role)
+                VALUES (?, ?, ?)
+            ''', (new_staff_id, clinic_id, role))
+            
+            conn.commit()
+            log_audit('ADD_STAFF', 'staff', new_staff_id,
+              old_value=None, new_value=f"Linked existing staff to clinic. Role: {role}, Username: {username}")
+            conn.close()
+            return {'success': True}
+        
+        if not password:
+            conn.close()
+            return {'success': False, 'error': 'Password is required for a new staff account.'}
+        
         hashed_pw = generate_password_hash(password)
+        
+        # 1. Insert into staff (no clinic_id column anymore)
         cursor.execute('''
-            INSERT INTO staff (uuid, clinic_id, full_name, role, username, password_hash, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (str(uuid.uuid4()), clinic_id, full_name, role, username, hashed_pw, datetime.datetime.now().isoformat()))
+            INSERT INTO staff (uuid, full_name, role, username, password_hash, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (str(uuid.uuid4()), full_name, role, username, hashed_pw, datetime.datetime.now().isoformat()))
+        
+        new_staff_id = cursor.lastrowid
+        
+        # 2. Link them to the current clinic via staff_clinics, with their role AT THIS clinic
+        cursor.execute('''
+            INSERT INTO staff_clinics (staff_id, clinic_id, role)
+            VALUES (?, ?, ?)
+        ''', (new_staff_id, clinic_id, role))
+        
         conn.commit()
-        log_audit('ADD_STAFF', 'staff', cursor.lastrowid, 
+        log_audit('ADD_STAFF', 'staff', new_staff_id, 
           old_value=None, new_value=f"Role: {role}, Username: {username}")
         conn.close()
         return {'success': True}
     except sqlite3.IntegrityError:
         conn.close()
-        return {'success': False, 'error': 'Username already exists.'}
+        return {'success': False, 'error': 'A staff member with this username already exists.'}
     except Exception as e:
         conn.close()
         return {'success': False, 'error': str(e)}
@@ -2740,20 +2924,34 @@ def edit_staff():
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
     
+    # Make sure this staff member actually belongs to the current clinic —
+    # otherwise an Admin could edit someone at a clinic they don't manage.
+    cursor.execute('''
+        SELECT 1 FROM staff_clinics WHERE staff_id = ? AND clinic_id = ?
+    ''', (staff_id, clinic_id))
+    if not cursor.fetchone():
+        conn.close()
+        return {'success': False, 'error': 'This staff member is not part of your clinic.'}
+    
     try:
         if password:
             # Update with new password
             hashed_pw = generate_password_hash(password)
             cursor.execute('''
-                UPDATE staff SET full_name = ?, role = ?, username = ?, password_hash = ?, updated_at = ?
-                WHERE id = ? AND clinic_id = ?
-            ''', (full_name, role, username, hashed_pw, datetime.datetime.now().isoformat(), staff_id, clinic_id))
+                UPDATE staff SET full_name = ?, username = ?, password_hash = ?, updated_at = ?
+                WHERE id = ?
+            ''', (full_name, username, hashed_pw, datetime.datetime.now().isoformat(), staff_id))
         else:
             # Update without changing password
             cursor.execute('''
-                UPDATE staff SET full_name = ?, role = ?, username = ?, updated_at = ?
-                WHERE id = ? AND clinic_id = ?
-            ''', (full_name, role, username, datetime.datetime.now().isoformat(), staff_id, clinic_id))
+                UPDATE staff SET full_name = ?, username = ?, updated_at = ?
+                WHERE id = ?
+            ''', (full_name, username, datetime.datetime.now().isoformat(), staff_id))
+        
+        # Role is per-clinic: update it only for THIS clinic's membership
+        cursor.execute('''
+            UPDATE staff_clinics SET role = ? WHERE staff_id = ? AND clinic_id = ?
+        ''', (role, staff_id, clinic_id))
         
         conn.commit()
         log_audit('EDIT_STAFF', 'staff', staff_id, 
@@ -2763,7 +2961,7 @@ def edit_staff():
         return {'success': True}
     except sqlite3.IntegrityError:
         conn.close()
-        return {'success': False, 'error': 'Username already exists.'}
+        return {'success': False, 'error': 'A staff member with this username already exists.'}
     except Exception as e:
         conn.close()
         return {'success': False, 'error': str(e)}
@@ -2771,7 +2969,7 @@ def edit_staff():
 
 @app.route('/staff/deactivate/<int:staff_id>', methods=['POST'])
 def deactivate_staff(staff_id):
-    """Soft-deactivate a staff member"""
+    """Soft-deactivate a staff member (deactivation is account-wide, across all their clinics)"""
     clinic_id = get_current_clinic_id()
     if not clinic_id:
         return {'success': False, 'error': 'No clinic selected.'}
@@ -2787,10 +2985,19 @@ def deactivate_staff(staff_id):
     
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
+    
+    # Make sure this staff member actually belongs to the current clinic
+    cursor.execute('''
+        SELECT 1 FROM staff_clinics WHERE staff_id = ? AND clinic_id = ?
+    ''', (staff_id, clinic_id))
+    if not cursor.fetchone():
+        conn.close()
+        return {'success': False, 'error': 'This staff member is not part of your clinic.'}
+    
     cursor.execute('''
         UPDATE staff SET is_active = 0, updated_at = ?
-        WHERE id = ? AND clinic_id = ?
-    ''', (datetime.datetime.now().isoformat(), staff_id, clinic_id))
+        WHERE id = ?
+    ''', (datetime.datetime.now().isoformat(), staff_id))
     conn.commit()
     log_audit('DEACTIVATE_STAFF', 'staff', staff_id, 
           old_value='Active', new_value='Deactivated')
@@ -2812,10 +3019,19 @@ def reactivate_staff(staff_id):
     
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
+    
+    # Make sure this staff member actually belongs to the current clinic
+    cursor.execute('''
+        SELECT 1 FROM staff_clinics WHERE staff_id = ? AND clinic_id = ?
+    ''', (staff_id, clinic_id))
+    if not cursor.fetchone():
+        conn.close()
+        return {'success': False, 'error': 'This staff member is not part of your clinic.'}
+    
     cursor.execute('''
         UPDATE staff SET is_active = 1, updated_at = ?
-        WHERE id = ? AND clinic_id = ?
-    ''', (datetime.datetime.now().isoformat(), staff_id, clinic_id))
+        WHERE id = ?
+    ''', (datetime.datetime.now().isoformat(), staff_id))
     conn.commit()
     log_audit('REACTIVATE_STAFF', 'staff', staff_id, 
           old_value='Inactive', new_value='Reactivated')
@@ -2843,12 +3059,13 @@ def staff():
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
     
-    # Fetch all active staff for this clinic
+    # Fetch all staff for this clinic, with their ROLE AT THIS CLINIC
     cursor.execute('''
-        SELECT id, full_name, role, username, is_active
+        SELECT staff.id, staff.full_name, staff_clinics.role, staff.username, staff.is_active
         FROM staff
-        WHERE clinic_id = ?
-        ORDER BY role, full_name
+        JOIN staff_clinics ON staff.id = staff_clinics.staff_id
+        WHERE staff_clinics.clinic_id = ?
+        ORDER BY staff_clinics.role, staff.full_name
     ''', (clinic_id,))
     staff_list = cursor.fetchall()
     conn.close()
@@ -3013,7 +3230,8 @@ def view_audit_log():
                audit_log.record_id, audit_log.old_value, audit_log.new_value, audit_log.timestamp
         FROM audit_log
         LEFT JOIN staff ON audit_log.staff_id = staff.id
-        WHERE staff.clinic_id = ?
+        JOIN staff_clinics ON staff.id = staff_clinics.staff_id
+        WHERE staff_clinics.clinic_id = ?
         ORDER BY audit_log.timestamp DESC
         LIMIT 50
     ''', (clinic_id,))

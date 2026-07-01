@@ -1,0 +1,35 @@
+{% extends 'layout.html' %}
+{% block content %}
+<div class="row mx-auto" style="max-width: 500px;">
+    <div class="col-12">
+        <h3 class="mb-3">🏥 Select Clinic</h3>
+        
+        {% if no_clinics %}
+            <div class="alert alert-warning">
+                <h5>You are not assigned to any clinic.</h5>
+                <p class="mb-0">If you are a new admin, <a href="/setup_clinic" class="fw-bold">click here to set up your first clinic</a>.</p>
+                <p class="mt-2 mb-0">If you were already assigned, contact your clinic admin.</p>
+            </div>
+        {% else %}
+            <p class="text-muted">You are assigned to multiple clinics. Choose which one to work in today.</p>
+            
+            <form method="POST">
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Clinic</label>
+                    <select name="clinic_id" class="form-select" required>
+                        <option value="">-- Select a clinic --</option>
+                        {% for id, name, clinic_role in clinics %}
+                        <option value="{{ id }}">{{ name }} ({{ clinic_role }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-success w-100">Enter Clinic</button>
+            </form>
+        {% endif %}
+        
+        <div class="mt-3 text-center">
+            <a href="/logout" class="btn btn-outline-danger btn-sm">Logout</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

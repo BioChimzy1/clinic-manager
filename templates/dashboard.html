@@ -155,6 +155,27 @@
             </div>
         </a>
     </div>
+
+    <!-- 9. CREATE NEW CLINIC (Admin Only) -->
+    {% if role|lower == 'admin' %}
+    <div class="col-md-6 col-lg-4">
+        <div class="card h-100 shadow-sm p-3 border-start border-4 border-secondary">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+                <h5 class="mb-0">➕ New Clinic</h5>
+            </div>
+            <p class="text-muted small">Start a fresh clinic with its own patients, inventory, and finance.</p>
+            <form action="/create_clinic" method="POST">
+                <div class="mb-2">
+                    <input type="text" name="clinic_name" class="form-control form-control-sm" placeholder="Clinic name" required>
+                </div>
+                <div class="mb-2">
+                    <input type="text" name="phone" class="form-control form-control-sm" placeholder="Phone (optional)">
+                </div>
+                <button type="submit" class="btn btn-secondary btn-sm w-100">➕ Create Clinic</button>
+            </form>
+        </div>
+    </div>
+    {% endif %}
 </div>
 
 <style>

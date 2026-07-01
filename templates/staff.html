@@ -4,9 +4,16 @@
     <div class="col-12">
         <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
             <h3 class="mb-0">👨‍⚕️ Staff Management</h3>
-            <button class="btn btn-success btn-sm" data-bs-toggle="modal" data-bs-target="#addStaffModal">
-                ➕ Add Staff
-            </button>
+            <div>
+                {% if role|lower == 'admin' %}
+                <button class="btn btn-outline-secondary btn-sm me-2" data-bs-toggle="modal" data-bs-target="#createClinicModal">
+                    ➕ New Clinic
+                </button>
+                {% endif %}
+                <button class="btn btn-success btn-sm" data-bs-toggle="modal" data-bs-target="#addStaffModal">
+                    ➕ Add Staff
+                </button>
+            </div>
         </div>
 
         <div class="table-responsive">
@@ -149,6 +156,33 @@
         </div>
     </div>
 </div>
+
+<!-- Create New Clinic Modal (Admin Only) -->
+{% if role|lower == 'admin' %}
+<div class="modal fade" id="createClinicModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-secondary text-white">
+                <h5 class="modal-title">➕ Create New Clinic</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form action="/create_clinic" method="POST">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Clinic Name <span class="text-danger">*</span></label>
+                        <input type="text" name="clinic_name" class="form-control" placeholder="e.g. Mwai Clinic" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Phone Number</label>
+                        <input type="text" name="phone" class="form-control" placeholder="e.g. 0992528659">
+                    </div>
+                    <button type="submit" class="btn btn-secondary w-100">➕ Create Clinic</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {

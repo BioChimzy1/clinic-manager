@@ -71,6 +71,24 @@
         .navbar-toggler-icon {
             filter: invert(1);
         }
+        .dropdown-menu {
+            background-color: var(--cream);
+            border: 1px solid rgba(15,76,70,0.1);
+            border-radius: 10px;
+            box-shadow: 0 8px 20px rgba(15,76,70,0.1);
+        }
+        .dropdown-item {
+            color: var(--charcoal);
+            font-size: 0.9rem;
+        }
+        .dropdown-item:hover {
+            background-color: var(--cream-dim);
+            color: var(--teal-deep);
+        }
+        .dropdown-item.active {
+            background-color: var(--teal);
+            color: var(--cream);
+        }
 
         /* ---------- MAIN CONTENT ---------- */
         main {
@@ -352,10 +370,31 @@
                     <a class="nav-link" href="/finance">📊 Finance</a>
                     
                     <!-- Management -->
-<a class="nav-link" href="/staff">👨‍⚕️ Staff</a>
-<a class="nav-link" href="/about">ℹ️ About</a>
-<a class="nav-link" href="/contact">📞 Contact</a>
-<a class="nav-link" href="/logout">🚪 Logout</a>
+                    <a class="nav-link" href="/staff">👨‍⚕️ Staff</a>
+                    <a class="nav-link" href="/about">ℹ️ About</a>
+                    <a class="nav-link" href="/contact">📞 Contact</a>
+
+                    <!-- Clinic Switcher Dropdown (only shown if 2+ clinics) -->
+                    {% if session.get('user_clinics') and session.get('user_clinics')|length > 1 %}
+                    <div class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="clinicDropdown" role="button" data-bs-toggle="dropdown">
+                            🏥 {{ session.get('clinic_name', 'Clinic') }}
+                        </a>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            {% for id, name, clinic_role in session.get('user_clinics') %}
+                            <li>
+                                <a class="dropdown-item {% if id == session.get('clinic_id') %}active fw-bold{% endif %}" 
+                                   href="/select_clinic?clinic_id={{ id }}">
+                                    {{ name }} <small class="text-muted">({{ clinic_role }})</small>
+                                    {% if id == session.get('clinic_id') %} ✓{% endif %}
+                                </a>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    {% endif %}
+
+                    <a class="nav-link" href="/logout">🚪 Logout</a>
                 </div>
             </div>
         </div>
