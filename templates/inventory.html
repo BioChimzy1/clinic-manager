@@ -2,10 +2,9 @@
 {% block content %}
 <div class="row">
     <div class="col-12 mb-4">
-        <!-- Header -->
         <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
             <h4 class="mb-0 text-dark">Clinic Inventory</h4>
-            <div class="btn-group">
+            <div class="btn-group" id="actionButtons">
                 <button class="btn btn-success btn-sm" type="button" id="openAddBtn">
                     ➕ Add Stock
                 </button>
@@ -15,7 +14,8 @@
             </div>
         </div>
 
-        <!-- Collapsible Add/Edit Form -->
+        <div class="mb-3" id="staleBanner" style="display: none;"></div>
+
         <div class="collapse mb-4" id="addInventoryForm">
             <div class="card card-body bg-light border position-relative">
                 <button type="button" class="btn-close position-absolute top-0 end-0 m-2" data-bs-toggle="collapse" data-bs-target="#addInventoryForm"></button>
@@ -24,7 +24,6 @@
                     <span class="text-primary" id="editModeTitle" style="display: none;">✏️ Editing: <span id="editingItemName"></span></span>
                 </h5>
 
-                <!-- Banner shown only while editing, with a clear way out -->
                 <div class="alert alert-primary d-flex justify-content-between align-items-center py-2 mb-3" id="editingBanner" style="display: none;">
                     <span>You're editing an existing item. Change anything below — name, category, quantity to add, alert level, or expiry — then press Update.</span>
                     <button type="button" class="btn btn-sm btn-outline-secondary ms-2" id="cancelEditBtn">Cancel / New Item</button>
@@ -32,10 +31,8 @@
                 
                 <form action="/inventory" method="POST" id="inventoryForm">
                     
-                    <!-- Hidden input to store the ID of the item being edited -->
                     <input type="hidden" name="inventory_id" id="inventoryIdInput" value="">
                     
-                    <!-- Item Name (Search + Autocomplete) -->
                     <div class="mb-3" style="position: relative;">
                         <label class="form-label fw-bold">Item Name</label>
                         <input type="text" name="item_name" id="itemNameInput" class="form-control" placeholder="e.g. Amoxicillin 500mg" autocomplete="off" required>
@@ -69,14 +66,11 @@
                         <input type="date" name="expiry_date" id="expiryInput" class="form-control" required>
                     </div>
                     
-                    <!-- TWO COMPLETELY SEPARATE BUTTONS -->
                     <div class="d-grid gap-2">
-                        <!-- ADD BUTTON (Visible by default, Green) -->
                         <button type="submit" id="addBtn" class="btn btn-success w-100">
                             ➕ Add New Item
                         </button>
                         
-                        <!-- EDIT BUTTON (Hidden by default, Blue) -->
                         <button type="submit" id="editBtn" class="btn btn-primary w-100" style="display: none;">
                             ✏️ Update Item
                         </button>
@@ -85,7 +79,6 @@
             </div>
         </div>
 
-        <!-- Inventory Table (Inline Edit Trigger) -->
         <div class="table-responsive">
             <table class="table table-striped align-middle">
                 <thead class="table-dark">
@@ -99,76 +92,154 @@
                         <th class="text-end">Actions</th>
                     </tr>
                 </thead>
-                <tbody>
-                    {% for item in items %}
-                    <tr>
-                        <td><span class="badge bg-secondary">{{ item[1] }}</span></td>
-                        <td><strong>{{ item[2] }}</strong></td>
-                        <td>{{ item[3] }}</td>
-                        <td><small class="text-muted">{{ item[5] }}</small></td>
-
-                        <!-- Stock status: 3 states based on quantity vs min_alert_level -->
-                        <td>
-                            {% if item[3] == 0 %}
-                                <span class="badge" style="background-color: #212529;">🚫 Out of Stock</span>
-                            {% elif item[3] <= item[4] %}
-                                <span class="badge bg-danger">⚠️ Low Stock</span>
-                            {% else %}
-                                <span class="badge bg-success">✅ Healthy</span>
-                            {% endif %}
-                        </td>
-
-                        <!-- Expiry status: 3 states based on expiry_date vs today / 14-day cutoff.
-                             Same 14-day window used on the dashboard, kept consistent. -->
-                        <td>
-                            {% if item[5] and item[5] < today %}
-                                <span class="badge" style="background-color: #6f0000;">⛔ Expired</span>
-                            {% elif item[5] and item[5] <= expiry_cutoff %}
-                                <span class="badge bg-warning text-dark">⏳ Expiring Soon</span>
-                            {% else %}
-                                <span class="badge bg-success">✅ OK</span>
-                            {% endif %}
-                        </td>
-
-                        <td class="text-end">
-                            <!-- Inline Edit Button: Triggers the top form -->
-                            <button class="btn btn-outline-primary btn-sm py-0 px-2 inline-edit-btn mb-1" 
-                                    data-id="{{ item[0] }}" 
-                                    data-name="{{ item[2] }}" 
-                                    data-category="{{ item[1] }}" 
-                                    data-qty="{{ item[3] }}" 
-                                    data-alert="{{ item[4] }}" 
-                                    data-expiry="{{ item[5] }}" 
-                                    style="font-size: 0.75rem;">✏️ Edit</button>
-                            <br>
-                            <!-- Clear/Reduce Stock: a separate, explicit subtract-only
-                                 action. Lets you remove some or all of this batch's
-                                 quantity (e.g. clearing out an expired batch, or a
-                                 partial write-off for damaged units) without touching
-                                 the Add/Edit form, which only ever adds. -->
-                            <button class="btn btn-outline-danger btn-sm py-0 px-2 clear-stock-btn"
-                                    data-id="{{ item[0] }}"
-                                    data-name="{{ item[2] }}"
-                                    data-qty="{{ item[3] }}"
-                                    data-expiry="{{ item[5] }}"
-                                    style="font-size: 0.75rem;">🗑️ Clear</button>
-                        </td>
-                    </tr>
-                    {% else %}
-                    <tr>
-                        <td colspan="7" class="text-center text-muted py-4">No stock in inventory yet.</td>
-                    </tr>
-                    {% endfor %}
+                <tbody id="inventoryTableBody">
+                    <tr><td colspan="7" class="text-center text-muted py-4">Loading...</td></tr>
                 </tbody>
             </table>
         </div>
     </div>
 </div>
 
-<!-- JAVASCRIPT -->
+<script src="{{ url_for('static', filename='js/outbox.js') }}"></script>
 <script>
+// ============================================================================
+// GLOBAL STATE & FORM ELEMENTS
+// ============================================================================
+let isOfflineMode = false;
+let allItems = [];
+
+// Form state - True while the form is locked into editing a specific item
+let isEditing = false;
+// True while the user has chosen "Edit Stock" as their *intent* but hasn't picked a specific item yet
+let editIntent = false;
+
+// ============================================================================
+// FORM REFERENCES (cached for performance)
+// ============================================================================
+let nameInput, results, catSelect, alertInput, expiryInput, qtyInput, invIdInput;
+let addBtn, editBtn, nameHint, qtyLabel, qtyHint, addModeTitle, editModeTitle;
+let editingItemName, editingBanner, cancelEditBtn, formElement;
+
+// ============================================================================
+// GLOBAL HELPER FUNCTIONS (accessible to event delegation)
+// ============================================================================
+
+function closeResults() {
+    results.style.display = 'none';
+    results.innerHTML = '';
+}
+
+function switchToEditMode(id, name, category, qty, alert, expiry) {
+    isEditing = true;
+    editIntent = false; // an item has now actually been picked
+
+    nameInput.value = name;
+    catSelect.value = category;
+    alertInput.value = alert;
+    expiryInput.value = expiry;
+    qtyInput.value = '';   // quantity field is "amount to ADD", start blank so old stock isn't re-added by accident
+    invIdInput.value = id;
+
+    editingItemName.textContent = name;
+    addModeTitle.style.display = 'none';
+    editModeTitle.style.display = 'inline';
+    editingBanner.style.display = 'flex';
+
+    nameHint.style.display = 'block';
+    nameHint.textContent = 'Editing existing item — you can rename, change category, or update expiry here.';
+
+    qtyLabel.textContent = 'Add to Current Stock (leave 0 if not restocking)';
+    qtyHint.style.display = 'block';
+    qtyHint.textContent = `Current quantity in stock: ${qty}. Enter how many units to ADD. Leave 0 to only edit details.`;
+
+    addBtn.style.display = 'none';
+    editBtn.style.display = 'block';
+
+    closeResults();
+}
+
+function switchToAddMode() {
+    isEditing = false;
+    editIntent = false;
+
+    invIdInput.value = '';
+    editingItemName.textContent = '';
+    addModeTitle.style.display = 'inline';
+    editModeTitle.style.display = 'none';
+    editingBanner.style.display = 'none';
+
+    nameHint.style.display = 'none';
+    qtyLabel.textContent = 'Quantity';
+    qtyHint.style.display = 'none';
+
+    addBtn.style.display = 'block';
+    editBtn.style.display = 'none';
+}
+
+function resetForm() {
+    switchToAddMode();
+    nameInput.value = '';
+    catSelect.value = 'Pharmacy';
+    alertInput.value = '100';
+    expiryInput.value = '';
+    qtyInput.value = '';
+    closeResults();
+}
+
+function openInAddMode() {
+    resetForm();
+    const formCollapse = new bootstrap.Collapse(document.getElementById('addInventoryForm'), { toggle: false });
+    formCollapse.show();
+    nameInput.focus();
+}
+
+function openInEditShell() {
+    resetForm();
+    editIntent = true;
+
+    addModeTitle.style.display = 'none';
+    editModeTitle.style.display = 'inline';
+    editingItemName.textContent = '(search below to choose an item)';
+
+    editingBanner.style.display = 'flex';
+    nameHint.style.display = 'block';
+    nameHint.textContent = 'Type a drug name and click it below to start editing.';
+
+    addBtn.style.display = 'none';
+    editBtn.style.display = 'none'; // nothing to submit until an item is actually picked
+
+    const formCollapse = new bootstrap.Collapse(document.getElementById('addInventoryForm'), { toggle: false });
+    formCollapse.show();
+    nameInput.focus();
+}
+
+// ============================================================================
+// DOM CONTENT LOADED - Initialize all event listeners and form handlers
+// ============================================================================
+
 document.addEventListener('DOMContentLoaded', function() {
-    const allItems = [
+    // Cache form elements
+    nameInput = document.getElementById('itemNameInput');
+    results = document.getElementById('results');
+    catSelect = document.getElementById('categorySelect');
+    alertInput = document.getElementById('alertInput');
+    expiryInput = document.getElementById('expiryInput');
+    qtyInput = document.getElementById('quantityInput');
+    invIdInput = document.getElementById('inventoryIdInput');
+    addBtn = document.getElementById('addBtn');
+    editBtn = document.getElementById('editBtn');
+    nameHint = document.getElementById('nameHint');
+    qtyLabel = document.getElementById('qtyLabel');
+    qtyHint = document.getElementById('qtyHint');
+    addModeTitle = document.getElementById('addModeTitle');
+    editModeTitle = document.getElementById('editModeTitle');
+    editingItemName = document.getElementById('editingItemName');
+    editingBanner = document.getElementById('editingBanner');
+    cancelEditBtn = document.getElementById('cancelEditBtn');
+    formElement = document.getElementById('addInventoryForm');
+
+    // Populate allItems from server data (Jinja template)
+    allItems = [
         {% for item in items %}
         {
             id: "{{ item[0] }}",
@@ -181,145 +252,20 @@ document.addEventListener('DOMContentLoaded', function() {
         {% endfor %}
     ];
 
-    const nameInput = document.getElementById('itemNameInput');
-    const results = document.getElementById('results');
-    const catSelect = document.getElementById('categorySelect');
-    const alertInput = document.getElementById('alertInput');
-    const expiryInput = document.getElementById('expiryInput');
-    const qtyInput = document.getElementById('quantityInput');
-    const invIdInput = document.getElementById('inventoryIdInput');
-    const addBtn = document.getElementById('addBtn');
-    const editBtn = document.getElementById('editBtn');
-    const nameHint = document.getElementById('nameHint');
-    const qtyLabel = document.getElementById('qtyLabel');
-    const qtyHint = document.getElementById('qtyHint');
-    const addModeTitle = document.getElementById('addModeTitle');
-    const editModeTitle = document.getElementById('editModeTitle');
-    const editingItemName = document.getElementById('editingItemName');
-    const editingBanner = document.getElementById('editingBanner');
-    const cancelEditBtn = document.getElementById('cancelEditBtn');
-
-    // True while the form is locked into editing a specific item
-    // (i.e. an inventory_id has been selected). While this is true,
-    // typing in the name field is treated as "I'm correcting/renaming
-    // this item" — NOT "this might be a new item".
-    let isEditing = false;
-
-    // True while the user has chosen "Edit Stock" as their *intent* but
-    // hasn't picked a specific item yet. In this state the form is empty,
-    // but we're waiting for them to search and click a match before
-    // isEditing becomes true.
-    let editIntent = false;
-
-    function closeResults() {
-        results.style.display = 'none';
-        results.innerHTML = '';
-    }
-
-    // Switch to Edit Mode
-    function switchToEditMode(id, name, category, qty, alert, expiry) {
-        isEditing = true;
-        editIntent = false; // an item has now actually been picked
-
-        nameInput.value = name;
-        catSelect.value = category;
-        alertInput.value = alert;
-        expiryInput.value = expiry;
-        qtyInput.value = '';   // quantity field is "amount to ADD", start blank so old stock isn't re-added by accident
-        invIdInput.value = id;
-
-        editingItemName.textContent = name;
-        addModeTitle.style.display = 'none';
-        editModeTitle.style.display = 'inline';
-        editingBanner.style.display = 'flex';
-
-        nameHint.style.display = 'block';
-        nameHint.textContent = 'Editing existing item — you can rename, change category, or update expiry here.';
-
-        qtyLabel.textContent = 'Add to Current Stock (leave 0 if not restocking)';
-        qtyHint.style.display = 'block';
-        qtyHint.textContent = `Current quantity in stock: ${qty}. Enter how many units to ADD. Leave 0 to only edit details.`;
-
-        addBtn.style.display = 'none';
-        editBtn.style.display = 'block';
-
-        closeResults();
-    }
-
-    // Switch to Add Mode
-    function switchToAddMode() {
-        isEditing = false;
-        editIntent = false;
-
-        invIdInput.value = '';
-        editingItemName.textContent = '';
-        addModeTitle.style.display = 'inline';
-        editModeTitle.style.display = 'none';
-        editingBanner.style.display = 'none';
-
-        nameHint.style.display = 'none';
-        qtyLabel.textContent = 'Quantity';
-        qtyHint.style.display = 'none';
-
-        addBtn.style.display = 'block';
-        editBtn.style.display = 'none';
-    }
-
-    // Full reset back to a blank Add form
-    function resetForm() {
-        switchToAddMode();
-        nameInput.value = '';
-        catSelect.value = 'Pharmacy';
-        alertInput.value = '100';
-        expiryInput.value = '';
-        qtyInput.value = '';
-        closeResults();
-    }
-
-    // Open the form already in pure Add mode (empty, ready to type/search,
-    // clicking a suggestion will jump straight to editing that item).
-    function openInAddMode() {
-        resetForm();
-        const formCollapse = new bootstrap.Collapse(document.getElementById('addInventoryForm'), { toggle: false });
-        formCollapse.show();
-        nameInput.focus();
-    }
-
-    // Open the form in an empty "Edit" shell: no item selected yet, but the
-    // form is waiting for you to search by name and click a match to load
-    // it for editing. Nothing can be submitted until an item is picked.
-    function openInEditShell() {
-        resetForm();
-        editIntent = true;
-
-        addModeTitle.style.display = 'none';
-        editModeTitle.style.display = 'inline';
-        editingItemName.textContent = '(search below to choose an item)';
-
-        editingBanner.style.display = 'flex';
-        nameHint.style.display = 'block';
-        nameHint.textContent = 'Type a drug name and click it below to start editing.';
-
-        addBtn.style.display = 'none';
-        editBtn.style.display = 'none'; // nothing to submit until an item is actually picked
-
-        const formCollapse = new bootstrap.Collapse(document.getElementById('addInventoryForm'), { toggle: false });
-        formCollapse.show();
-        nameInput.focus();
-    }
-
+    // ========================================================================
+    // BUTTON LISTENERS
+    // ========================================================================
     document.getElementById('openAddBtn').addEventListener('click', openInAddMode);
     document.getElementById('openEditBtn').addEventListener('click', openInEditShell);
-
     cancelEditBtn.addEventListener('click', resetForm);
 
-    // Autocomplete Logic
+    // ========================================================================
+    // AUTOCOMPLETE LOGIC
+    // ========================================================================
     nameInput.addEventListener('input', function () {
         const query = this.value.trim();
 
-        // EDIT SHELL: no item picked yet. This is a pure search — there is
-        // no "new item will be created" path here, since Edit Stock only
-        // makes sense for something that already exists.
+        // EDIT SHELL: no item picked yet.
         if (editIntent && !isEditing) {
             closeResults();
             if (query.length === 0) return;
@@ -336,7 +282,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const div = document.createElement('div');
                 div.className = 'p-2 border-bottom bg-white';
                 div.style.cursor = 'pointer';
-                div.innerHTML = `<strong>${item.name}</strong> <small class="text-muted">(${item.category}, exp ${item.expiry})</small>`;
+                div.innerHTML = `<strong>${cmEscapeHtml(item.name)}</strong> <small class="text-muted">(${cmEscapeHtml(item.category)}, exp ${item.expiry})</small>`;
                 div.addEventListener('click', () => {
                     switchToEditMode(item.id, item.name, item.category, item.qty, item.alert, item.expiry);
                 });
@@ -346,11 +292,7 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
-        // While actively editing an item, typing in the name field is just
-        // a rename/correction. We don't reset to Add Mode and we don't show
-        // "new item will be created" — that was the bug. We still show
-        // matches below ONLY as a way to jump to a DIFFERENT item, never
-        // to silently cancel the current edit.
+        // While actively editing an item
         if (isEditing) {
             closeResults();
 
@@ -368,7 +310,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     const div = document.createElement('div');
                     div.className = 'p-2 border-bottom bg-white';
                     div.style.cursor = 'pointer';
-                    div.innerHTML = `<small class="text-muted">Switch to editing:</small> <strong>${item.name}</strong> <small class="text-muted">(${item.category})</small>`;
+                    div.innerHTML = `<small class="text-muted">Switch to editing:</small> <strong>${cmEscapeHtml(item.name)}</strong> <small class="text-muted">(${cmEscapeHtml(item.category)})</small>`;
                     div.addEventListener('click', () => {
                         switchToEditMode(item.id, item.name, item.category, item.qty, item.alert, item.expiry);
                     });
@@ -403,16 +345,8 @@ document.addEventListener('DOMContentLoaded', function() {
             const div = document.createElement('div');
             div.className = 'p-2 border-bottom bg-white';
             div.style.cursor = 'pointer';
-            div.innerHTML = `<strong>${item.name}</strong> <small class="text-muted">(${item.category}, exp ${item.expiry})</small>`;
+            div.innerHTML = `<strong>${cmEscapeHtml(item.name)}</strong> <small class="text-muted">(${cmEscapeHtml(item.category)}, exp ${item.expiry})</small>`;
             div.addEventListener('click', () => {
-                // ADD mode must always create a new row, never edit.
-                // Clicking a suggestion here only pre-fills name + category
-                // so you don't have to retype them — it never sets
-                // inventory_id and never switches modes. Quantity, alert
-                // level, and expiry stay exactly as you've typed them.
-                // The backend itself blocks submitting with the SAME
-                // expiry as an existing batch (forcing you to pick a
-                // different one), so there's no need to do that here too.
                 nameInput.value = item.name;
                 catSelect.value = item.category;
                 closeResults();
@@ -423,41 +357,218 @@ document.addEventListener('DOMContentLoaded', function() {
         results.style.display = 'block';
     });
 
+    // Close results when clicking outside
     document.addEventListener('click', (e) => {
         if (!results.contains(e.target) && e.target !== nameInput) {
             closeResults();
         }
     });
 
-    // Inline Edit Button Logic
-    document.querySelectorAll('.inline-edit-btn').forEach(btn => {
-        btn.addEventListener('click', function() {
-            const id = this.getAttribute('data-id');
-            const name = this.getAttribute('data-name');
-            const category = this.getAttribute('data-category');
-            const qty = this.getAttribute('data-qty');
-            const alert = this.getAttribute('data-alert');
-            const expiry = this.getAttribute('data-expiry');
+    // Reset to clean Add form whenever the collapse is fully closed
+    formElement.addEventListener('hidden.bs.collapse', resetForm);
+
+    // ========================================================================
+    // OFFLINE LOGIC INITIALIZATION & EVENT DELEGATION BRIDGING
+    // ========================================================================
+    attachDelegatedHandlers();
+
+    loadInventory();
+    window.addEventListener('online', loadInventory);
+});
+
+// ============================================================================
+// INVENTORY LOADING & RENDERING (Offline-first)
+// ============================================================================
+
+async function loadInventory() {
+    const tbody = document.getElementById('inventoryTableBody');
+    try {
+        const res = await fetch('/api/inventory');
+        if (!res.ok) throw new Error('bad response');
+        const data = await res.json();
+        await cmSaveInventorySnapshot(data);
+        
+        // ✅ Sync the autocomplete source of truth with the fresh API data
+        if (data.items) {
+            allItems = data.items.map(item => ({
+                id: item.id,
+                name: item.name,
+                category: item.category,
+                alert: item.min_alert,
+                expiry: item.expiry,
+                qty: item.qty
+            }));
+        }
+        
+        renderInventory(data, false);
+    } catch (err) {
+        const cached = await cmGetInventorySnapshot();
+        if (cached) {
+            // ✅ Keep it synced even from cache while offline
+            if (cached.items) {
+                allItems = cached.items.map(item => ({
+                    id: item.id,
+                    name: item.name,
+                    category: item.category,
+                    alert: item.min_alert,
+                    expiry: item.expiry,
+                    qty: item.qty
+                }));
+            }
+            renderInventory(cached, true);
+        } else {
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">No cached inventory yet. Connect once to load it.</td></tr>';
+        }
+    }
+}
+
+function renderInventory(data, isStale) {
+    const tbody = document.getElementById('inventoryTableBody');
+    const banner = document.getElementById('staleBanner');
+    const actionBtns = document.getElementById('actionButtons');
+
+    // Sync global runtime state with connectivity results
+    isOfflineMode = isStale;
+
+    if (isStale) {
+        const when = new Date(data.fetched_at).toLocaleString();
+        banner.className = 'alert alert-warning py-2 px-3 mb-3';
+        banner.innerHTML = `⏳ As of ${when} — go online to see current stock levels and take actions.`;
+        banner.style.display = 'block';
+        
+        actionBtns.querySelectorAll('button').forEach(btn => {
+            btn.disabled = true;
+            btn.title = 'Connect to the internet to manage stock';
+        });
+
+        // Also lock the Add/Edit form's own submit buttons -- these live
+        // outside #actionButtons (inside the collapsible form), so the
+        // loop above never reaches them. Without this, a form left open
+        // from before the connection dropped could still be submitted
+        // straight into a dead network call.
+        if (addBtn) {
+            addBtn.disabled = true;
+            addBtn.title = 'Connect to the internet to save changes';
+        }
+        if (editBtn) {
+            editBtn.disabled = true;
+            editBtn.title = 'Connect to the internet to save changes';
+        }
+    } else {
+        banner.style.display = 'none';
+        actionBtns.querySelectorAll('button').forEach(btn => {
+            btn.disabled = false;
+            btn.title = '';
+        });
+
+        if (addBtn) {
+            addBtn.disabled = false;
+            addBtn.title = '';
+        }
+        if (editBtn) {
+            editBtn.disabled = false;
+            editBtn.title = '';
+        }
+    }
+
+    const items = data.items || [];
+    if (items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">No stock in inventory yet.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = items.map(item => renderInventoryRow(item, data.today, data.expiry_cutoff)).join('');
+}
+
+function renderInventoryRow(item, todayStr, cutoffStr) {
+    // Stock status logic
+    let stockBadge = '';
+    if (item.qty == 0) {
+        stockBadge = '<span class="badge" style="background-color: #212529;">🚫 Out of Stock</span>';
+    } else if (item.qty <= item.min_alert) {
+        stockBadge = '<span class="badge bg-danger">⚠️ Low Stock</span>';
+    } else {
+        stockBadge = '<span class="badge bg-success">✅ Healthy</span>';
+    }
+
+    // Expiry status logic
+    let expiryBadge = '';
+    if (item.expiry && item.expiry < todayStr) {
+        expiryBadge = '<span class="badge" style="background-color: #6f0000;">⛔ Expired</span>';
+    } else if (item.expiry && item.expiry <= cutoffStr) {
+        expiryBadge = '<span class="badge bg-warning text-dark">⏳ Expiring Soon</span>';
+    } else {
+        expiryBadge = '<span class="badge bg-success">✅ OK</span>';
+    }
+
+    const actions = isOfflineMode
+        ? `<span class="text-muted small">🔒 Offline — view only</span>`
+        : `
+            <button class="btn btn-outline-primary btn-sm py-0 px-2 inline-edit-btn mb-1" 
+                    data-id="${item.id}" data-name="${cmEscapeHtml(item.name)}" 
+                    data-category="${cmEscapeHtml(item.category)}" data-qty="${item.qty}" 
+                    data-alert="${item.min_alert}" data-expiry="${item.expiry}" 
+                    style="font-size: 0.75rem;">✏️ Edit</button>
+            <br>
+            <button class="btn btn-outline-danger btn-sm py-0 px-2 clear-stock-btn"
+                    data-id="${item.id}" data-name="${cmEscapeHtml(item.name)}"
+                    data-qty="${item.qty}" data-expiry="${item.expiry}"
+                    style="font-size: 0.75rem;">🗑️ Clear</button>
+        `;
+
+    return `
+        <tr>
+            <td><span class="badge bg-secondary">${cmEscapeHtml(item.category)}</span></td>
+            <td><strong>${cmEscapeHtml(item.name)}</strong></td>
+            <td>${item.qty}</td>
+            <td><small class="text-muted">${item.expiry || ''}</small></td>
+            <td>${stockBadge}</td>
+            <td>${expiryBadge}</td>
+            <td class="text-end">${actions}</td>
+        </tr>
+    `;
+}
+
+// ============================================================================
+// EVENT DELEGATION FOR TABLE BUTTONS
+// ============================================================================
+function attachDelegatedHandlers() {
+    const tbody = document.getElementById('inventoryTableBody');
+    if (!tbody || tbody.dataset.delegatedListenerAttached) return;
+    
+    tbody.dataset.delegatedListenerAttached = 'true';
+    
+    tbody.addEventListener('click', function(e) {
+        const btn = e.target.closest('button');
+        if (!btn) return;
+
+        // 1. Check for Edit button
+        if (btn.classList.contains('inline-edit-btn')) {
+            const id = btn.dataset.id;
+            const name = btn.dataset.name;
+            const category = btn.dataset.category;
+            const qty = btn.dataset.qty;
+            const alert = btn.dataset.alert;
+            const expiry = btn.dataset.expiry;
 
             switchToEditMode(id, name, category, qty, alert, expiry);
 
             const formCollapse = new bootstrap.Collapse(document.getElementById('addInventoryForm'), { toggle: false });
             formCollapse.show();
             document.getElementById('addInventoryForm').scrollIntoView({ behavior: 'smooth' });
-        });
-    });
+            return;
+        }
 
-    // Clear / Reduce Stock Button Logic.
-    // Separate, subtract-only action -- never touches the Add/Edit form.
-    // Defaults the prompt to the full current quantity (so clicking
-    // through with the default does a full "clear to 0"), but you can
-    // type a smaller number for a partial write-off.
-    document.querySelectorAll('.clear-stock-btn').forEach(btn => {
-        btn.addEventListener('click', function() {
-            const id = this.getAttribute('data-id');
-            const name = this.getAttribute('data-name');
-            const currentQty = parseInt(this.getAttribute('data-qty'), 10);
-            const expiry = this.getAttribute('data-expiry');
+        // 2. Check for Clear Stock button
+        if (btn.classList.contains('clear-stock-btn')) {
+            if (isOfflineMode) {
+              alert("Inventory management is unavailable while offline.");
+              return;
+          }
+            const id = btn.dataset.id;
+            const name = btn.dataset.name;
+            const currentQty = parseInt(btn.dataset.qty, 10);
+            const expiry = btn.dataset.expiry;
 
             const input = prompt(
                 `Remove how many units of "${name}" (exp ${expiry})?\n` +
@@ -489,9 +600,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 body: JSON.stringify({ amount: amount })
             })
             .then(response => response.json())
-            .then(data => {
+            .then(async data => {
                 if (data.success) {
-                    location.reload();
+                    await loadInventory(); // Smoothly updates the UI and autocomplete in-place!
+                    // Optional: close the form if it was open
                 } else {
                     alert('Error: ' + (data.error || 'Could not remove stock.'));
                 }
@@ -499,12 +611,9 @@ document.addEventListener('DOMContentLoaded', function() {
             .catch(() => {
                 alert('Network error -- could not remove stock.');
             });
-        });
+            return;
+        }
     });
- 
-    // Reset to clean Add form whenever the collapse is fully closed,
-    // so reopening it doesn't leave stale edit state behind.
-    document.getElementById('addInventoryForm').addEventListener('hidden.bs.collapse', resetForm);
-});
+}
 </script>
 {% endblock %}

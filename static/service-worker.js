@@ -14,7 +14,8 @@ const STATIC_ASSETS = [
 const SAFE_TO_CACHE_PAGES = [
   '/register',
   '/queue',
-  '/price_list'
+  '/price_list',
+  '/inventory'
 ];
 
 importScripts('/static/js/outbox.js');

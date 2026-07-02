@@ -76,6 +76,49 @@ def get_price_list_data(clinic_id):
     rows = cursor.fetchall()
     conn.close()
     return rows    
+  
+  
+def get_inventory_data(clinic_id):
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, category, item_name, quantity, min_alert_level, expiry_date
+        FROM inventory
+        WHERE clinic_id = ? AND is_active = 1
+        ORDER BY expiry_date ASC
+    """, (clinic_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+@app.route('/api/inventory')
+def api_inventory():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return jsonify({'error': 'no_clinic'}), 400
+    
+    rows = get_inventory_data(clinic_id)
+    today_str = datetime.date.today().isoformat()
+    expiry_cutoff_str = (datetime.date.today() + datetime.timedelta(days=14)).isoformat()
+    
+    items = [
+        {
+            'id': row[0],
+            'category': row[1],
+            'name': row[2],
+            'qty': row[3],
+            'min_alert': row[4],
+            'expiry': row[5]
+        }
+        for row in rows
+    ]
+    
+    return jsonify({
+        'items': items,
+        'fetched_at': datetime.datetime.now().isoformat(),
+        'today': today_str,
+        'expiry_cutoff': expiry_cutoff_str
+    })
     
 # ------------------------------------------------------------------
 # AUDIT LOGGING HELPER
@@ -1298,14 +1341,14 @@ def reduce_inventory(item_id):
         conn.close()
         return {'success': False, 'error': 'Amount must be greater than 0.'}
 
-    cursor.execute("SELECT quantity FROM inventory WHERE id = ? AND clinic_id = ? AND is_active = 1", (item_id, clinic_id))
+    cursor.execute("SELECT quantity, item_name FROM inventory WHERE id = ? AND clinic_id = ? AND is_active = 1", (item_id, clinic_id))
     row = cursor.fetchone()
 
     if row is None:
         conn.close()
         return {'success': False, 'error': 'Item not found.'}
 
-    current_qty = row[0]
+    current_qty, item_name = row
 
     if amount_to_remove > current_qty:
         conn.close()
@@ -1318,6 +1361,11 @@ def reduce_inventory(item_id):
         (new_qty, datetime.datetime.now().isoformat(), item_id)
     )
     conn.commit()
+
+    log_audit('REDUCE_INVENTORY', 'inventory', item_id,
+              old_value=f"{item_name}, Qty: {current_qty}",
+              new_value=f"{item_name}, Qty: {new_qty} (-{amount_to_remove})")
+
     conn.close()
 
     return {'success': True, 'new_quantity': new_qty}
