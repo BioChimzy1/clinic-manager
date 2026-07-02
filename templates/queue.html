@@ -5,8 +5,9 @@
     <a href="/register" class="btn btn-success btn-sm">➕ Register New Patient</a>
 </div>
 
-<div class="mb-3">
-    <span class="badge bg-dark fs-6">{{ total_in_queue }} {{ 'patient' if total_in_queue == 1 else 'patients' }} in queue</span>
+<div class="mb-3 d-flex align-items-center gap-2 flex-wrap">
+    <span class="badge bg-dark fs-6" id="queueCountBadge">Loading...</span>
+    <span class="badge bg-warning text-dark" id="staleBadge" style="display: none;"></span>
 </div>
 
 <div id="pendingSyncBanner" class="alert alert-warning py-2 px-3 mb-3" style="display: none;"></div>
@@ -30,100 +31,131 @@
                 <th style="width: 100px; text-align: right;">Action</th>
             </tr>
         </thead>
-        <tbody>
-            {% for patient in queue %}
-            <tr data-name="{{ patient[1]|lower }}">
-                <td><strong>{{ patient[1] }}</strong></td>
-                
-                <!-- FIX: Show Appointment Type correctly -->
-                <td>
-                    {% if patient[4] == 'Appointment' %}
-                        <span class="badge bg-primary">Appointment</span>
-                    {% else %}
-                        <span class="badge bg-success">Walk-In</span>
-                    {% endif %}
-                </td>
-                
-                <td>{{ patient[2] }}</td>
-                
-                <!-- Show the REAL status from the database, not a guess
-                     based on appointment_type. This used to assume every
-                     'Appointment' must be 'Pending', which silently
-                     disagreed with the actual status column whenever the
-                     two didn't match (e.g. stale/old data, or a doctor
-                     having already confirmed an appointment, moving its
-                     real status away from 'Pending'). -->
-                <td>
-                    {% if patient[5] == 'Pending' %}
-                        <span class="badge bg-info text-dark">Pending</span>
-                    {% else %}
-                        <span class="badge bg-warning text-dark">Waiting</span>
-                    {% endif %}
-                </td>
-                
-                <!-- FIX: Clean Action button that fits on mobile -->
-                <td class="text-end">
-                    <!-- If status is Pending, go to review. If Waiting, go to visit. -->
-{% if patient[5] == 'Pending' %}
-    <a href="/appointments/review/{{ patient[0] }}" class="btn btn-outline-warning btn-sm" style="white-space: nowrap;">
-        📋 Review
-    </a>
-{% else %}
-    <a href="/visit/{{ patient[0] }}" class="btn btn-primary btn-sm" style="white-space: nowrap;">
-        📋 Open
-    </a>
-{% endif %}
-                </td>
-            </tr>
-            {% else %}
-            <tr id="emptyQueueRow">
-                <td colspan="5" class="text-center text-muted py-4">No patients in the queue.</td>
-            </tr>
-            {% endfor %}
+        <tbody id="queueTableBody">
+            <!-- Rows are rendered by JS below, from /api/queue or the
+                 last cached snapshot. There is no server-rendered data
+                 here on purpose -- this keeps the page cacheable by the
+                 service worker for offline loads. -->
         </tbody>
     </table>
 </div>
 
 <script src="{{ url_for('static', filename='js/outbox.js') }}"></script>
 <script>
+let currentPatients = [];
+
 document.addEventListener('DOMContentLoaded', function () {
-    const searchInput = document.getElementById('queueSearchInput');
-    const noResultsMsg = document.getElementById('noResultsMsg');
-
-    function currentRows() {
-        return document.querySelectorAll('table tbody tr[data-name]');
-    }
-
-    if (searchInput) {
-        searchInput.addEventListener('input', function () {
-            const query = this.value.trim().toLowerCase();
-            let visibleCount = 0;
-
-            currentRows().forEach((row) => {
-                const matches = row.getAttribute('data-name').includes(query);
-                row.style.display = matches ? '' : 'none';
-                if (matches) visibleCount++;
-            });
-
-            noResultsMsg.style.display = (visibleCount === 0 && query.length > 0) ? 'block' : 'none';
-        });
-    }
-
+    loadQueue();
     renderPendingRegistrations();
-    window.addEventListener('online', renderPendingRegistrations);
+    window.addEventListener('online', () => {
+        loadQueue();
+        renderPendingRegistrations();
+    });
+
+    const searchInput = document.getElementById('queueSearchInput');
+    searchInput.addEventListener('input', function () {
+        const query = this.value.trim().toLowerCase();
+        applySearch(query);
+    });
 });
 
+// Tries the live API first. On success, caches the snapshot for next
+// time we're offline. On failure, falls back to the last cached
+// snapshot and clearly labels it as possibly stale, so nobody mistakes
+// it for live data.
+async function loadQueue() {
+    try {
+        const res = await fetch('/api/queue');
+        if (!res.ok) throw new Error('bad response');
+        const data = await res.json();
+        await cmSaveQueueSnapshot(data);
+        renderQueue(data, false);
+    } catch (err) {
+        const cached = await cmGetQueueSnapshot();
+        if (cached) {
+            renderQueue(cached, true);
+        } else {
+            // Never successfully loaded on this device before -- nothing
+            // to fall back to.
+            document.getElementById('queueCountBadge').textContent = 'Unable to load queue';
+            document.getElementById('queueTableBody').innerHTML =
+                '<tr><td colspan="5" class="text-center text-muted py-4">No cached queue data yet. Connect once to load it.</td></tr>';
+        }
+    }
+}
+
+function renderQueue(data, isStale) {
+    currentPatients = data.patients || [];
+    const tbody = document.getElementById('queueTableBody');
+    const countBadge = document.getElementById('queueCountBadge');
+    const staleBadge = document.getElementById('staleBadge');
+
+    countBadge.textContent = `${currentPatients.length} ${currentPatients.length === 1 ? 'patient' : 'patients'} in queue`;
+
+    if (isStale) {
+        const when = new Date(data.fetched_at).toLocaleString();
+        staleBadge.textContent = `⏳ Last updated ${when} — may be outdated`;
+        staleBadge.style.display = 'inline-block';
+    } else {
+        staleBadge.style.display = 'none';
+    }
+
+    if (currentPatients.length === 0) {
+        tbody.innerHTML = '<tr id="emptyQueueRow"><td colspan="5" class="text-center text-muted py-4">No patients in the queue.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = currentPatients.map(renderQueueRow).join('');
+    applySearch(document.getElementById('queueSearchInput').value.trim().toLowerCase());
+}
+
+function renderQueueRow(p) {
+    const typeBadge = p.appointment_type === 'Appointment'
+        ? '<span class="badge bg-primary">Appointment</span>'
+        : '<span class="badge bg-success">Walk-In</span>';
+
+    const statusBadge = p.status === 'Pending'
+        ? '<span class="badge bg-info text-dark">Pending</span>'
+        : '<span class="badge bg-warning text-dark">Waiting</span>';
+
+    const actionBtn = p.status === 'Pending'
+        ? `<a href="/appointments/review/${p.id}" class="btn btn-outline-warning btn-sm" style="white-space: nowrap;">📋 Review</a>`
+        : `<a href="/visit/${p.id}" class="btn btn-primary btn-sm" style="white-space: nowrap;">📋 Open</a>`;
+
+    return `
+        <tr data-name="${cmEscapeHtml(p.name.toLowerCase())}">
+            <td><strong>${cmEscapeHtml(p.name)}</strong></td>
+            <td>${typeBadge}</td>
+            <td>${cmEscapeHtml(p.sex || '')}</td>
+            <td>${statusBadge}</td>
+            <td class="text-end">${actionBtn}</td>
+        </tr>
+    `;
+}
+
+function applySearch(query) {
+    const rows = document.querySelectorAll('table tbody tr[data-name]');
+    const noResultsMsg = document.getElementById('noResultsMsg');
+    let visibleCount = 0;
+
+    rows.forEach((row) => {
+        const matches = row.getAttribute('data-name').includes(query);
+        row.style.display = matches ? '' : 'none';
+        if (matches) visibleCount++;
+    });
+
+    noResultsMsg.style.display = (visibleCount === 0 && query.length > 0) ? 'block' : 'none';
+}
+
+// Unchanged from before: shows patients registered offline that
+// haven't synced to the server yet, as temporary rows on top of
+// whatever loadQueue() rendered.
 async function renderPendingRegistrations() {
-    // cmSyncAllRegistrations() both retries anything unsynced AND
-    // returns the fresh list — covers browsers without Background
-    // Sync (e.g. iOS Safari) since it fires here on every page load.
     const all = await cmSyncAllRegistrations();
     const pending = all.filter((r) => !r.synced);
     const banner = document.getElementById('pendingSyncBanner');
-    const tbody = document.querySelector('table tbody');
+    const tbody = document.getElementById('queueTableBody');
 
-    // Clear any previously-injected optimistic rows so repeated calls
-    // (e.g. the 'online' event firing again) don't duplicate them.
     document.querySelectorAll('tr[data-pending-uuid]').forEach((el) => el.remove());
 
     if (pending.length === 0) {
@@ -135,7 +167,7 @@ async function renderPendingRegistrations() {
     banner.textContent = `⏳ ${pending.length} patient(s) registered offline, waiting to sync to the server...`;
 
     const emptyRow = document.getElementById('emptyQueueRow');
-    if (emptyRow) emptyRow.style.display = 'none';
+    if (emptyRow) emptyRow.remove();
 
     pending.forEach((record) => {
         const p = record.payload;
@@ -154,6 +186,13 @@ async function renderPendingRegistrations() {
         `;
         tbody.insertBefore(tr, tbody.firstChild);
     });
+
+    // renderPendingRegistrations may have just synced records, which
+    // means the real queue on the server now includes them -- refresh
+    // so they show up as proper rows instead of "Syncing" placeholders.
+    if (all.some((r) => r.synced) && navigator.onLine) {
+        loadQueue();
+    }
 }
 </script>
 {% endblock %}

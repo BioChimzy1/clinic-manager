@@ -14,8 +14,9 @@
 // ------------------------------------------------------------------
 
 const CM_DB_NAME = 'cm_outbox_v1';
-const CM_DB_VERSION = 1;
+const CM_DB_VERSION = 2;                          // was 1
 const STORE_QUEUE_REG = 'queue_registrations';
+const STORE_QUEUE_SNAPSHOT = 'queue_snapshot';    // new
 
 function cmOpenDB() {
   return new Promise((resolve, reject) => {
@@ -24,6 +25,9 @@ function cmOpenDB() {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE_QUEUE_REG)) {
         db.createObjectStore(STORE_QUEUE_REG, { keyPath: 'client_uuid' });
+      }
+      if (!db.objectStoreNames.contains(STORE_QUEUE_SNAPSHOT)) {
+        db.createObjectStore(STORE_QUEUE_SNAPSHOT, { keyPath: 'key' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -45,6 +49,30 @@ function cmGetAllRegistrations() {
     const tx = db.transaction(STORE_QUEUE_REG, 'readonly');
     const req = tx.objectStore(STORE_QUEUE_REG).getAll();
     req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  }));
+}
+
+// Caches the last successful /api/queue response, keyed under a fixed
+// 'current' key since there's only ever one "current queue" per device.
+// Called every time the queue page successfully loads live data, so the
+// snapshot is always as fresh as the last time this device had a signal.
+function cmSaveQueueSnapshot(data) {
+  return cmOpenDB().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_QUEUE_SNAPSHOT, 'readwrite');
+    tx.objectStore(STORE_QUEUE_SNAPSHOT).put({ key: 'current', ...data });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  }));
+}
+
+// Returns the last cached queue snapshot, or null if none exists yet
+// (e.g. very first load ever happened offline).
+function cmGetQueueSnapshot() {
+  return cmOpenDB().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_QUEUE_SNAPSHOT, 'readonly');
+    const req = tx.objectStore(STORE_QUEUE_SNAPSHOT).get('current');
+    req.onsuccess = () => resolve(req.result || null);
     req.onerror = () => reject(req.error);
   }));
 }

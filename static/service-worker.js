@@ -1,17 +1,21 @@
-const CACHE_NAME = 'clinicmanager-v2';
+const CACHE_NAME = 'clinicmanager-v3';   // was v2 — bump forces old cache cleanup
 
-// Only cache static, non-changing assets. Do NOT cache HTML pages here —
-// this app's pages are all dynamic/DB-driven (queue, cashier, finance),
-// so caching them would show stale patient/financial data offline.
 const STATIC_ASSETS = [
   '/static/manifest.json',
   '/static/js/outbox.js'
 ];
 
-// Pulls in cmSyncAllRegistrations() and friends from the same file the
-// pages use, so the outbox logic lives in exactly one place. This
-// works because outbox.js avoids any window-only APIs (uses `self`
-// instead of `window` throughout).
+// Pages safe to cache: their HTML no longer embeds live data (queue
+// data now comes from /api/queue via JS), so a stale copy of the shell
+// itself is never wrong — only the data inside it can be stale, and
+// that's clearly labeled by queue.html itself.
+// Do NOT add /cashier, /dashboard, /finance, /inventory here until
+// they've been converted to the same shell + JSON pattern.
+const SAFE_TO_CACHE_PAGES = [
+  '/register',
+  '/queue'
+];
+
 importScripts('/static/js/outbox.js');
 
 self.addEventListener('install', (event) => {
@@ -32,29 +36,32 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Network-first for everything. This is a data-heavy clinical app —
-// stale cached HTML showing the wrong queue or wrong stock levels is
-// worse than no offline support at all. We only fall back to cache for
-// the static assets listed above, and only when the network truly fails.
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
 
+  const url = new URL(event.request.url);
+  const isSafePage = SAFE_TO_CACHE_PAGES.includes(url.pathname);
+
   event.respondWith(
-    fetch(event.request).catch(() =>
-      caches.match(event.request).then((cached) => {
-        return cached || new Response(
-          'You are offline and this page was not cached.',
-          { status: 503, headers: { 'Content-Type': 'text/plain' } }
-        );
+    fetch(event.request)
+      .then((response) => {
+        if (isSafePage && response.ok) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        }
+        return response;
       })
-    )
+      .catch(() =>
+        caches.match(event.request).then((cached) => {
+          return cached || new Response(
+            'You are offline and this page was not cached.',
+            { status: 503, headers: { 'Content-Type': 'text/plain' } }
+          );
+        })
+      )
   );
 });
 
-// Fires when connectivity returns, even if no ClinicManager tab is
-// open. This is what actually flushes patient registrations queued
-// while offline — the retry-on-page-load logic in queue.html is a
-// fallback for browsers (e.g. iOS Safari) that don't support this.
 self.addEventListener('sync', (event) => {
   if (event.tag === 'sync-queue-registrations') {
     event.waitUntil(cmSyncAllRegistrations());

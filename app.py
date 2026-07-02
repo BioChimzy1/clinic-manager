@@ -3,7 +3,7 @@ import sqlite3
 import datetime
 import uuid
 import math
-from flask import Flask, render_template, request, redirect, url_for, send_from_directory, session, flash
+from flask import Flask, render_template, request, redirect, url_for, send_from_directory, session, flash, jsonify
 from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
@@ -753,18 +753,15 @@ def api_queue_register():
     }, 201
 
 # ------------------------------------------------------------------
-# ACTIVE QUEUE ROUTE
+# ACTIVE QUEUE — shared query used by both the HTML page and the
+# offline read-cache JSON API, so the two can never drift apart.
 # ------------------------------------------------------------------
-@app.route('/queue')
-def queue():
-    clinic_id = get_current_clinic_id()
-    if not clinic_id:
-        return redirect(url_for('setup_clinic'))
+def get_queue_data(clinic_id):
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
-    
+
     cursor.execute('''
-        SELECT patients.id, patients.name, patients.sex, patients.phone, 
+        SELECT patients.id, patients.name, patients.sex, patients.phone,
                appointments.appointment_type, appointments.status
         FROM patients
         JOIN appointments ON patients.id = appointments.patient_id
@@ -774,8 +771,41 @@ def queue():
     ''', (clinic_id,))
     queue_list = cursor.fetchall()
     conn.close()
-    
-    return render_template('queue.html', queue=queue_list, total_in_queue=len(queue_list))
+    return queue_list
+
+@app.route('/queue')
+def queue():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
+    return render_template('queue.html')
+
+# Read-only JSON snapshot of the queue, for the offline cache in
+# queue.html. Same query as the HTML route above via get_queue_data(),
+# so the two never disagree on what "the queue" is.
+@app.route('/api/queue')
+def api_queue():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return jsonify({'error': 'no_clinic'}), 400
+
+    queue_list = get_queue_data(clinic_id)
+    patients = [
+        {
+            'id': row[0],
+            'name': row[1],
+            'sex': row[2],
+            'phone': row[3],
+            'appointment_type': row[4],
+            'status': row[5]
+        }
+        for row in queue_list
+    ]
+    return jsonify({
+        'patients': patients,
+        'total_in_queue': len(patients),
+        'fetched_at': datetime.datetime.now().isoformat()
+    })
     
 # ------------------------------------------------------------------
 # APPOINTMENT MANAGEMENT
