@@ -103,6 +103,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 ? "You're connected but the server isn't responding."
                 : "Turn on your internet.";
             alert(`✅ Patient saved locally! ${reason} Go to the Queue to confirm once connected.`);
+            form.reset();
             saveBtn.disabled = false;
             saveBtn.textContent = 'Save Patient';
         }
