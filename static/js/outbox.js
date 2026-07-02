@@ -14,9 +14,10 @@
 // ------------------------------------------------------------------
 
 const CM_DB_NAME = 'cm_outbox_v1';
-const CM_DB_VERSION = 2;                          // was 1
+const CM_DB_VERSION = 3;                              // was 2
 const STORE_QUEUE_REG = 'queue_registrations';
-const STORE_QUEUE_SNAPSHOT = 'queue_snapshot';    // new
+const STORE_QUEUE_SNAPSHOT = 'queue_snapshot';
+const STORE_PRICE_LIST_SNAPSHOT = 'price_list_snapshot';   // new
 
 function cmOpenDB() {
   return new Promise((resolve, reject) => {
@@ -28,6 +29,9 @@ function cmOpenDB() {
       }
       if (!db.objectStoreNames.contains(STORE_QUEUE_SNAPSHOT)) {
         db.createObjectStore(STORE_QUEUE_SNAPSHOT, { keyPath: 'key' });
+      }
+      if (!db.objectStoreNames.contains(STORE_PRICE_LIST_SNAPSHOT)) {
+        db.createObjectStore(STORE_PRICE_LIST_SNAPSHOT, { keyPath: 'key' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -72,6 +76,26 @@ function cmGetQueueSnapshot() {
   return cmOpenDB().then((db) => new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_QUEUE_SNAPSHOT, 'readonly');
     const req = tx.objectStore(STORE_QUEUE_SNAPSHOT).get('current');
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  }));
+}
+
+// Same pattern as cmSaveQueueSnapshot/cmGetQueueSnapshot, for the
+// price list + live stock status shown on /price_list.
+function cmSavePriceListSnapshot(data) {
+  return cmOpenDB().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_PRICE_LIST_SNAPSHOT, 'readwrite');
+    tx.objectStore(STORE_PRICE_LIST_SNAPSHOT).put({ key: 'current', ...data });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  }));
+}
+
+function cmGetPriceListSnapshot() {
+  return cmOpenDB().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_PRICE_LIST_SNAPSHOT, 'readonly');
+    const req = tx.objectStore(STORE_PRICE_LIST_SNAPSHOT).get('current');
     req.onsuccess = () => resolve(req.result || null);
     req.onerror = () => reject(req.error);
   }));

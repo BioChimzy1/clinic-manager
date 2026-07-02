@@ -1,4 +1,4 @@
-const CACHE_NAME = 'clinicmanager-v3';   // was v2 — bump forces old cache cleanup
+const CACHE_NAME = 'clinicmanager-v4';   // was v3
 
 const STATIC_ASSETS = [
   '/static/manifest.json',
@@ -13,7 +13,8 @@ const STATIC_ASSETS = [
 // they've been converted to the same shell + JSON pattern.
 const SAFE_TO_CACHE_PAGES = [
   '/register',
-  '/queue'
+  '/queue',
+  '/price_list'
 ];
 
 importScripts('/static/js/outbox.js');

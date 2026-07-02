@@ -4,10 +4,12 @@
     <div class="col-12 mb-4">
         <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
             <h4 class="mb-0 text-dark">Price List</h4>
-            <button class="btn btn-success btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#addPriceForm">
+            <button class="btn btn-success btn-sm" type="button" id="addPriceToggleBtn" data-bs-toggle="collapse" data-bs-target="#addPriceForm">
                 ➕ Add Price
             </button>
         </div>
+
+        <div class="mb-3" id="staleBanner" style="display: none;"></div>
 
         <!-- Collapsible Add Form -->
         <div class="collapse mb-4" id="addPriceForm">
@@ -51,7 +53,9 @@
             </div>
         </div>
 
-        <!-- Price List Table (With Inline Edit) -->
+        <!-- Price List Table -- rows rendered by JS from /api/price_list
+             or the last cached snapshot, never embedded server-side, so
+             the page shell itself stays cacheable for offline viewing. -->
         <div class="table-responsive">
             <table class="table table-striped align-middle">
                 <thead class="table-dark">
@@ -64,54 +68,8 @@
                         <th class="text-end">Actions</th>
                     </tr>
                 </thead>
-                <tbody>
-                    {% for item in price_list %}
-                    {% set is_out_of_stock = (item[7] == 0 and item[5] == 0 and item[6] == 0) %}
-                    <tr class="{{ 'opacity-50' if is_out_of_stock else '' }}">
-                        <td>{{ item[0] }}</td>
-                        <td><span class="badge bg-info text-dark">{{ item[1] }}</span></td>
-                        <td>
-                            <strong>{{ item[2] }}</strong>
-
-                            {% if item[7] == 1 %}
-                                <!-- No stock concept (Procedures, Consultation, etc.) -->
-                            {% elif item[5] > 0 and item[6] == 0 %}
-                                <span class="badge bg-success ms-1">✅ Available</span>
-                            {% elif item[5] > 0 and item[6] > 0 %}
-                                <span class="badge bg-success ms-1">✅ Available</span>
-                                <span class="badge bg-warning text-dark ms-1">⚠️ Some stock expired</span>
-                            {% elif item[5] == 0 and item[6] > 0 %}
-                                <span class="badge" style="background-color: #6f0000; color: #fff;">⛔ Available but expired</span>
-                            {% else %}
-                                <span class="badge bg-secondary ms-1">🚫 Out of stock</span>
-                            {% endif %}
-                        </td>
-                        <td class="text-end">
-                            <input type="number" step="0.01" class="form-control form-control-sm d-inline-block edit-price" 
-                                   style="width: 100px;" value="{{ "%.2f"|format(item[3] / 100) }}" data-id="{{ item[0] }}" min="0">
-                        </td>
-                        <td class="text-end">
-                            <input type="number" class="form-control form-control-sm d-inline-block edit-qty" 
-                                   style="width: 60px;" value="{{ item[4] }}" data-id="{{ item[0] }}" min="0">
-                        </td>
-                        <td class="text-end">
-                            <div class="d-flex flex-column flex-md-row gap-1 align-items-md-end align-items-start">
-                                <!-- Save Button -->
-                                <button class="btn btn-outline-primary btn-sm py-0 px-2 save-edit-btn" data-id="{{ item[0] }}" style="font-size: 0.75rem;">💾</button>
-                                
-                                <!-- History Button -->
-                                <button class="btn btn-outline-secondary btn-sm py-0 px-2 history-btn" data-id="{{ item[0] }}" data-name="{{ item[2] }}" style="font-size: 0.75rem;">📜 Hist</button>
-                                
-                                <!-- Delete Button -->
-                                <a href="/price_list/delete/{{ item[0] }}" class="btn btn-outline-danger btn-sm py-0 px-2" style="font-size: 0.75rem;" onclick="return confirm('Delete this price item?')">🗑️</a>
-                            </div>
-                        </td>
-                    </tr>
-                    {% else %}
-                    <tr>
-                        <td colspan="6" class="text-center text-muted py-4">No prices added yet.</td>
-                    </tr>
-                    {% endfor %}
+                <tbody id="priceTableBody">
+                    <tr><td colspan="6" class="text-center text-muted py-4">Loading...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -152,22 +110,17 @@
     </div>
 </div>
 
-<!-- JavaScript for Autocomplete, Inline Save & Price History -->
+<script src="{{ url_for('static', filename='js/outbox.js') }}"></script>
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    // --- Autocomplete Logic ---
-    const inventoryItems = [
-        {% for item in inventory_items %}
-        { name: "{{ item[0] }}", category: "{{ item[1] }}" },
-        {% endfor %}
-    ];
-    const priceListItems = [
-        {% for item in price_list %}
-        { name: "{{ item[2] }}", category: "{{ item[1] }}" },
-        {% endfor %}
-    ];
-    const allItems = [...inventoryItems, ...priceListItems];
+let autocompleteItems = [];
+let isOfflineMode = false;
 
+document.addEventListener('DOMContentLoaded', function () {
+    loadPriceList();
+    window.addEventListener('online', loadPriceList);
+
+    // --- Autocomplete Logic (source data now loaded async, listener
+    //     itself only needs to be attached once) ---
     const nameInput = document.getElementById('itemNameInput');
     const results = document.getElementById('results');
     const catSelect = document.getElementById('itemTypeSelect');
@@ -184,7 +137,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const selectedCategory = catSelect.value;
         if (query.length === 0) { closeResults(); return; }
 
-        let matches = allItems.filter(item => 
+        let matches = autocompleteItems.filter(item =>
             item.name.toLowerCase().includes(query.toLowerCase()) &&
             (selectedCategory === '' || item.category === selectedCategory)
         );
@@ -205,7 +158,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const div = document.createElement('div');
             div.className = 'p-2 border-bottom bg-white';
             div.style.cursor = 'pointer';
-            div.innerHTML = `<strong>${item.name}</strong> <small class="text-muted">(${item.category})</small>`;
+            div.innerHTML = `<strong>${cmEscapeHtml(item.name)}</strong> <small class="text-muted">(${cmEscapeHtml(item.category)})</small>`;
             div.addEventListener('click', () => {
                 nameInput.value = item.name;
                 catSelect.value = item.category;
@@ -222,16 +175,125 @@ document.addEventListener('DOMContentLoaded', function() {
             closeResults();
         }
     });
+});
 
-    // --- Inline Edit Save Logic ---
+// Tries the live API first. On success, caches the snapshot. On
+// failure, falls back to the last cached snapshot and clearly labels
+// it as possibly outdated -- and disables every write action (add,
+// edit, delete, history), since those all require the server's real,
+// current stock and price data to be meaningful and safe.
+async function loadPriceList() {
+    try {
+        const res = await fetch('/api/price_list');
+        if (!res.ok) throw new Error('bad response');
+        const data = await res.json();
+        await cmSavePriceListSnapshot(data);
+        renderPriceList(data, false);
+    } catch (err) {
+        const cached = await cmGetPriceListSnapshot();
+        if (cached) {
+            renderPriceList(cached, true);
+        } else {
+            document.getElementById('priceTableBody').innerHTML =
+                '<tr><td colspan="6" class="text-center text-muted py-4">No cached price list yet. Connect once to load it.</td></tr>';
+        }
+    }
+}
+
+function renderPriceList(data, isStale) {
+    isOfflineMode = isStale;
+    autocompleteItems = [
+        ...(data.inventory_items || []),
+        ...(data.items || []).map((item) => ({ name: item.item_name, category: item.item_type }))
+    ];
+
+    const banner = document.getElementById('staleBanner');
+    const addBtn = document.getElementById('addPriceToggleBtn');
+
+    if (isStale) {
+        const when = new Date(data.fetched_at).toLocaleString();
+        banner.className = 'alert alert-warning py-2 px-3 mb-3';
+        banner.innerHTML = `⏳ As of ${when} — go online to see current stock or updated prices.`;
+        banner.style.display = 'block';
+        addBtn.disabled = true;
+        addBtn.title = 'Connect to the internet to add prices';
+    } else {
+        banner.style.display = 'none';
+        addBtn.disabled = false;
+        addBtn.title = '';
+    }
+
+    const items = data.items || [];
+    const tbody = document.getElementById('priceTableBody');
+
+    if (items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No prices added yet.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = items.map(renderPriceRow).join('');
+    attachRowHandlers();
+}
+
+function renderPriceRow(item) {
+    const isOutOfStock = (item.no_stock_concept === 0 && item.usable_qty === 0 && item.expired_qty === 0);
+
+    let stockBadge = '';
+    if (item.no_stock_concept === 1) {
+        stockBadge = '';
+    } else if (item.usable_qty > 0 && item.expired_qty === 0) {
+        stockBadge = '<span class="badge bg-success ms-1">✅ Available</span>';
+    } else if (item.usable_qty > 0 && item.expired_qty > 0) {
+        stockBadge = '<span class="badge bg-success ms-1">✅ Available</span> <span class="badge bg-warning text-dark ms-1">⚠️ Some stock expired</span>';
+    } else if (item.usable_qty === 0 && item.expired_qty > 0) {
+        stockBadge = '<span class="badge" style="background-color: #6f0000; color: #fff;">⛔ Available but expired</span>';
+    } else {
+        stockBadge = '<span class="badge bg-secondary ms-1">🚫 Out of stock</span>';
+    }
+
+    const priceFormatted = (item.price / 100).toFixed(2);
+    const disabledAttr = isOfflineMode ? 'disabled title="Connect to the internet to edit"' : '';
+
+    const actions = isOfflineMode
+        ? `<span class="text-muted small">🔒 Offline — view only</span>`
+        : `
+            <div class="d-flex flex-column flex-md-row gap-1 align-items-md-end align-items-start">
+                <button class="btn btn-outline-primary btn-sm py-0 px-2 save-edit-btn" data-id="${item.id}" style="font-size: 0.75rem;">💾</button>
+                <button class="btn btn-outline-secondary btn-sm py-0 px-2 history-btn" data-id="${item.id}" data-name="${cmEscapeHtml(item.item_name)}" style="font-size: 0.75rem;">📜 Hist</button>
+                <a href="/price_list/delete/${item.id}" class="btn btn-outline-danger btn-sm py-0 px-2" style="font-size: 0.75rem;" onclick="return confirm('Delete this price item?')">🗑️</a>
+            </div>
+        `;
+
+    return `
+        <tr class="${isOutOfStock ? 'opacity-50' : ''}">
+            <td>${item.id}</td>
+            <td><span class="badge bg-info text-dark">${cmEscapeHtml(item.item_type)}</span></td>
+            <td><strong>${cmEscapeHtml(item.item_name)}</strong> ${stockBadge}</td>
+            <td class="text-end">
+                <input type="number" step="0.01" class="form-control form-control-sm d-inline-block edit-price"
+                       style="width: 100px;" value="${priceFormatted}" data-id="${item.id}" min="0" ${disabledAttr}>
+            </td>
+            <td class="text-end">
+                <input type="number" class="form-control form-control-sm d-inline-block edit-qty"
+                       style="width: 60px;" value="${item.quantity}" data-id="${item.id}" min="0" ${disabledAttr}>
+            </td>
+            <td class="text-end">${actions}</td>
+        </tr>
+    `;
+}
+
+// Re-attaches Save/History listeners after every render, since the
+// rows (and therefore the buttons) are recreated each time. Skipped
+// entirely in offline mode, since those buttons aren't rendered then.
+function attachRowHandlers() {
     document.querySelectorAll('.save-edit-btn').forEach(btn => {
-        btn.addEventListener('click', function() {
+        btn.addEventListener('click', function () {
             const id = this.getAttribute('data-id');
             const row = this.closest('tr');
             const priceInput = row.querySelector('.edit-price');
             const qtyInput = row.querySelector('.edit-qty');
 
-            const price = parseFloat(priceInput.value) * 100; // Convert to Tambala
+            const price = parseFloat(priceInput.value) * 100;
             const qty = parseInt(qtyInput.value);
 
             fetch('/price_list/update/' + id, {
@@ -247,18 +309,18 @@ document.addEventListener('DOMContentLoaded', function() {
                 } else {
                     alert('Error saving changes!');
                 }
-            });
+            })
+            .catch(() => alert('Could not save -- check your connection.'));
         });
     });
 
-    // --- Price History Logic ---
     const priceHistoryModal = new bootstrap.Modal(document.getElementById('priceHistoryModal'));
 
     document.querySelectorAll('.history-btn').forEach(btn => {
-        btn.addEventListener('click', function() {
+        btn.addEventListener('click', function () {
             const itemId = this.dataset.id;
             const itemName = this.dataset.name;
-            
+
             document.getElementById('phItemName').textContent = itemName;
             document.getElementById('priceHistoryBody').innerHTML = '<tr><td colspan="6" class="text-center text-muted">Loading history...</td></tr>';
             priceHistoryModal.show();
@@ -270,7 +332,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     document.getElementById('priceHistoryBody').innerHTML = '<tr><td colspan="6" class="text-center text-muted">No price changes recorded yet.</td></tr>';
                     return;
                 }
-                
+
                 let html = '';
                 data.history.forEach(record => {
                     html += `
@@ -291,6 +353,6 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
     });
-});
+}
 </script>
 {% endblock %}

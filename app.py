@@ -37,6 +37,46 @@ def get_current_clinic_id():
         session['clinic_id'] = clinic_id
     return clinic_id
     
+    
+def get_price_list_data(clinic_id):
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    today_str = datetime.date.today().isoformat()
+
+    cursor.execute('''
+        SELECT price_list.id, price_list.item_type, price_list.item_name,
+               price_list.price, price_list.quantity,
+               COALESCE(stock.usable_qty, 0) AS usable_qty,
+               COALESCE(stock.expired_qty, 0) AS expired_qty,
+               CASE WHEN price_list.inventory_id IS NULL THEN 1 ELSE 0 END AS no_stock_concept
+        FROM price_list
+        LEFT JOIN inventory AS linked_item
+            ON price_list.inventory_id = linked_item.id
+        LEFT JOIN (
+            SELECT LOWER(TRIM(item_name)) AS name_key, category,
+                   SUM(CASE WHEN expiry_date >= ? THEN quantity ELSE 0 END) AS usable_qty,
+                   SUM(CASE WHEN expiry_date <  ? THEN quantity ELSE 0 END) AS expired_qty
+            FROM inventory
+            WHERE is_active = 1
+            GROUP BY name_key, category
+        ) AS stock
+            ON stock.name_key = LOWER(TRIM(linked_item.item_name))
+            AND stock.category = linked_item.category
+        WHERE price_list.is_active = 1
+          AND price_list.clinic_id = ?
+        ORDER BY
+            CASE
+                WHEN price_list.inventory_id IS NULL THEN 0
+                WHEN COALESCE(stock.usable_qty, 0) > 0 THEN 0
+                WHEN COALESCE(stock.expired_qty, 0) > 0 THEN 1
+                ELSE 2
+            END,
+            price_list.item_name
+    ''', (today_str, today_str, clinic_id))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows    
+    
 # ------------------------------------------------------------------
 # AUDIT LOGGING HELPER
 # ------------------------------------------------------------------
@@ -1320,6 +1360,7 @@ def price_list():
         conn.close()
         return redirect(url_for('price_list'))
     
+    """
     # GET: Fetch price list and inventory items for autocomplete.
     #
     # Stock + expiry status is computed LIVE here, never stored. For each
@@ -1373,10 +1414,47 @@ def price_list():
     
     cursor.execute("SELECT item_name, category FROM inventory WHERE clinic_id = ? AND is_active = 1", (clinic_id,))
     inventory_items = cursor.fetchall()
+    """
     
     conn.close()
     
-    return render_template('price_list.html', price_list=price_list, inventory_items=inventory_items)
+    return render_template('price_list.html')
+    
+# Read-only JSON snapshot of the price list + stock status, for the
+# offline cache in price_list.html. Same query as the page's own data
+# via get_price_list_data(), so the two never disagree.
+@app.route('/api/price_list')
+def api_price_list():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return jsonify({'error': 'no_clinic'}), 400
+
+    rows = get_price_list_data(clinic_id)
+    items = [
+        {
+            'id': row[0],
+            'item_type': row[1],
+            'item_name': row[2],
+            'price': row[3],
+            'quantity': row[4],
+            'usable_qty': row[5],
+            'expired_qty': row[6],
+            'no_stock_concept': row[7]
+        }
+        for row in rows
+    ]
+
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT item_name, category FROM inventory WHERE clinic_id = ? AND is_active = 1", (clinic_id,))
+    inventory_items = [{'name': r[0], 'category': r[1]} for r in cursor.fetchall()]
+    conn.close()
+
+    return jsonify({
+        'items': items,
+        'inventory_items': inventory_items,
+        'fetched_at': datetime.datetime.now().isoformat()
+    })    
 
 @app.route('/price_list/update/<int:item_id>', methods=['POST'])
 def update_price_item(item_id):
