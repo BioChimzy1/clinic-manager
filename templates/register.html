@@ -85,9 +85,27 @@ document.addEventListener('DOMContentLoaded', function () {
         // dropped connection or a closed tab right after tapping Save
         // never loses the registration. The queue page picks up
         // anything still unsynced and keeps retrying automatically.
-        await cmQueueRegistration(payload);
+        const { success } = await cmQueueRegistration(payload);
 
-        window.location.href = '/queue';
+        // Base navigation on whether the sync actually succeeded, not
+        // just navigator.onLine — that flag can be true even when the
+        // device has no real route to the server (e.g. captive portal,
+        // flaky Wi-Fi), which would otherwise redirect to /queue while
+        // the record is still sitting unsynced.
+
+        if (success) {
+            window.location.href = '/queue';
+        } else {
+            // Distinguish "no network at all" from "connected but server
+            // unreachable" (flaky Wi-Fi, captive portal, weak signal, etc.)
+            // rather than assuming every sync failure means fully offline.
+            const reason = navigator.onLine
+                ? "You're connected but the server isn't responding."
+                : "Turn on your internet.";
+            alert(`✅ Patient saved locally! ${reason} Go to the Queue to confirm once connected.`);
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save Patient';
+        }
     });
 });
 </script>
