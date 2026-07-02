@@ -1,11 +1,18 @@
-const CACHE_NAME = 'clinicmanager-v1';
+const CACHE_NAME = 'clinicmanager-v2';
 
 // Only cache static, non-changing assets. Do NOT cache HTML pages here —
 // this app's pages are all dynamic/DB-driven (queue, cashier, finance),
 // so caching them would show stale patient/financial data offline.
 const STATIC_ASSETS = [
-  '/static/manifest.json'
+  '/static/manifest.json',
+  '/static/js/outbox.js'
 ];
+
+// Pulls in cmSyncAllRegistrations() and friends from the same file the
+// pages use, so the outbox logic lives in exactly one place. This
+// works because outbox.js avoids any window-only APIs (uses `self`
+// instead of `window` throughout).
+importScripts('/static/js/outbox.js');
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -42,4 +49,14 @@ self.addEventListener('fetch', (event) => {
       })
     )
   );
+});
+
+// Fires when connectivity returns, even if no ClinicManager tab is
+// open. This is what actually flushes patient registrations queued
+// while offline — the retry-on-page-load logic in queue.html is a
+// fallback for browsers (e.g. iOS Safari) that don't support this.
+self.addEventListener('sync', (event) => {
+  if (event.tag === 'sync-queue-registrations') {
+    event.waitUntil(cmSyncAllRegistrations());
+  }
 });

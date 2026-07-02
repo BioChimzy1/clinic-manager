@@ -9,6 +9,8 @@
     <span class="badge bg-dark fs-6">{{ total_in_queue }} {{ 'patient' if total_in_queue == 1 else 'patients' }} in queue</span>
 </div>
 
+<div id="pendingSyncBanner" class="alert alert-warning py-2 px-3 mb-3" style="display: none;"></div>
+
 <div class="mb-3">
     <input type="text" id="queueSearchInput" class="form-control" placeholder="🔍 Search by patient name..." autocomplete="off">
 </div>
@@ -74,7 +76,7 @@
                 </td>
             </tr>
             {% else %}
-            <tr>
+            <tr id="emptyQueueRow">
                 <td colspan="5" class="text-center text-muted py-4">No patients in the queue.</td>
             </tr>
             {% endfor %}
@@ -82,26 +84,76 @@
     </table>
 </div>
 
+<script src="{{ url_for('static', filename='js/outbox.js') }}"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     const searchInput = document.getElementById('queueSearchInput');
     const noResultsMsg = document.getElementById('noResultsMsg');
-    const rows = document.querySelectorAll('table tbody tr[data-name]');
 
-    if (!searchInput) return;
+    function currentRows() {
+        return document.querySelectorAll('table tbody tr[data-name]');
+    }
 
-    searchInput.addEventListener('input', function () {
-        const query = this.value.trim().toLowerCase();
-        let visibleCount = 0;
+    if (searchInput) {
+        searchInput.addEventListener('input', function () {
+            const query = this.value.trim().toLowerCase();
+            let visibleCount = 0;
 
-        rows.forEach((row) => {
-            const matches = row.getAttribute('data-name').includes(query);
-            row.style.display = matches ? '' : 'none';
-            if (matches) visibleCount++;
+            currentRows().forEach((row) => {
+                const matches = row.getAttribute('data-name').includes(query);
+                row.style.display = matches ? '' : 'none';
+                if (matches) visibleCount++;
+            });
+
+            noResultsMsg.style.display = (visibleCount === 0 && query.length > 0) ? 'block' : 'none';
         });
+    }
 
-        noResultsMsg.style.display = (visibleCount === 0 && query.length > 0) ? 'block' : 'none';
-    });
+    renderPendingRegistrations();
+    window.addEventListener('online', renderPendingRegistrations);
 });
+
+async function renderPendingRegistrations() {
+    // cmSyncAllRegistrations() both retries anything unsynced AND
+    // returns the fresh list — covers browsers without Background
+    // Sync (e.g. iOS Safari) since it fires here on every page load.
+    const all = await cmSyncAllRegistrations();
+    const pending = all.filter((r) => !r.synced);
+    const banner = document.getElementById('pendingSyncBanner');
+    const tbody = document.querySelector('table tbody');
+
+    // Clear any previously-injected optimistic rows so repeated calls
+    // (e.g. the 'online' event firing again) don't duplicate them.
+    document.querySelectorAll('tr[data-pending-uuid]').forEach((el) => el.remove());
+
+    if (pending.length === 0) {
+        banner.style.display = 'none';
+        return;
+    }
+
+    banner.style.display = 'block';
+    banner.textContent = `⏳ ${pending.length} patient(s) registered offline, waiting to sync to the server...`;
+
+    const emptyRow = document.getElementById('emptyQueueRow');
+    if (emptyRow) emptyRow.style.display = 'none';
+
+    pending.forEach((record) => {
+        const p = record.payload;
+        const tr = document.createElement('tr');
+        tr.setAttribute('data-pending-uuid', record.client_uuid);
+        tr.setAttribute('data-name', p.name.toLowerCase());
+        const typeBadge = p.appointment_type === 'Appointment'
+            ? '<span class="badge bg-primary">Appointment</span>'
+            : '<span class="badge bg-success">Walk-In</span>';
+        tr.innerHTML = `
+            <td><strong>${cmEscapeHtml(p.name)}</strong></td>
+            <td>${typeBadge}</td>
+            <td>${cmEscapeHtml(p.sex || '')}</td>
+            <td><span class="badge bg-secondary">⏳ Syncing</span></td>
+            <td class="text-end text-muted small">Waiting for connection</td>
+        `;
+        tbody.insertBefore(tr, tbody.firstChild);
+    });
+}
 </script>
 {% endblock %}

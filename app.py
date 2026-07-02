@@ -663,6 +663,95 @@ def register():
         
     return render_template('register.html')
 
+@app.route('/service-worker.js')
+def service_worker():
+    # Served from root (not /static/) on purpose. A service worker's
+    # maximum control area defaults to the folder it's served from —
+    # registering it at /static/service-worker.js would only ever let
+    # it control pages under /static/, never /queue, /register, etc.
+    # The Service-Worker-Allowed header makes the wider scope explicit.
+    response = send_from_directory('static', 'service-worker.js')
+    response.headers['Content-Type'] = 'application/javascript'
+    response.headers['Service-Worker-Allowed'] = '/'
+    return response
+    
+    
+# ------------------------------------------------------------------
+# OFFLINE-FIRST PATIENT REGISTRATION (JSON API, idempotent by client UUID)
+# ------------------------------------------------------------------
+
+@app.route('/api/queue/register', methods=['POST'])
+def api_queue_register():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return {'error': 'no_clinic'}, 400
+
+    data = request.get_json(silent=True)
+    if not data:
+        return {'error': 'invalid_json'}, 400
+
+    client_uuid = data.get('client_uuid')
+    name = data.get('name')
+    if not client_uuid or not name:
+        return {'error': 'missing_fields'}, 400
+
+    date_of_birth = data.get('date_of_birth')
+    sex = data.get('sex')
+    phone = data.get('phone')
+    location = data.get('location')
+    appointment_type = data.get('appointment_type', 'Walk-In')
+
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+
+    # Idempotency check: has this exact registration already been processed?
+    # client_uuid is generated once on the device and re-sent on every retry,
+    # so a dropped connection + resend never creates a duplicate patient.
+    cursor.execute('SELECT id FROM patients WHERE uuid = ?', (client_uuid,))
+    existing = cursor.fetchone()
+    if existing:
+        patient_id = existing[0]
+        cursor.execute('''
+            SELECT status FROM appointments WHERE patient_id = ? ORDER BY id DESC LIMIT 1
+        ''', (patient_id,))
+        row = cursor.fetchone()
+        status = row[0] if row else 'Waiting'
+        conn.close()
+        return {
+            'status': 'already_processed',
+            'patient_id': patient_id,
+            'queue_status': status
+        }, 200
+
+    now = datetime.datetime.now().isoformat()
+
+    cursor.execute('''
+        INSERT INTO patients (uuid, clinic_id, name, date_of_birth, sex, phone, location, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (client_uuid, clinic_id, name, date_of_birth, sex, phone, location, now))
+    patient_id = cursor.lastrowid
+
+    queue_status = 'Pending' if appointment_type == 'Appointment' else 'Waiting'
+
+    cursor.execute('''
+        INSERT INTO appointments (uuid, clinic_id, patient_id, doctor_id, appointment_date, appointment_type, reason, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        str(uuid.uuid4()), clinic_id, patient_id, session.get('staff_id'),
+        now, appointment_type, 'Consultation', queue_status, now
+    ))
+
+    conn.commit()
+    log_audit('REGISTER_PATIENT', 'patients', patient_id,
+              old_value=None, new_value=f"Name: {name}, Sex: {sex} (offline-sync)")
+    conn.close()
+
+    return {
+        'status': 'processed',
+        'patient_id': patient_id,
+        'queue_status': queue_status
+    }, 201
+
 # ------------------------------------------------------------------
 # ACTIVE QUEUE ROUTE
 # ------------------------------------------------------------------
