@@ -79,6 +79,14 @@
             </div>
         </div>
 
+        <div class="mb-3">
+            <input type="text" id="inventorySearchInput" class="form-control" placeholder="🔍 Search by item name..." autocomplete="off">
+        </div>
+
+        <div id="noInventoryResultsMsg" class="text-center text-muted py-4" style="display: none;">
+            No items match your search.
+        </div>
+
         <div class="table-responsive">
             <table class="table table-striped align-middle">
                 <thead class="table-dark">
@@ -258,6 +266,16 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('openAddBtn').addEventListener('click', openInAddMode);
     document.getElementById('openEditBtn').addEventListener('click', openInEditShell);
     cancelEditBtn.addEventListener('click', resetForm);
+
+    // ========================================================================
+    // TABLE FILTER (separate from the Add/Edit form's autocomplete above --
+    // this just shows/hides already-rendered rows, same pattern as
+    // queue.html's applySearch()).
+    // ========================================================================
+    const inventorySearchInput = document.getElementById('inventorySearchInput');
+    inventorySearchInput.addEventListener('input', function () {
+        applyInventorySearch(this.value.trim().toLowerCase());
+    });
 
     // ========================================================================
     // AUTOCOMPLETE LOGIC
@@ -478,6 +496,29 @@ function renderInventory(data, isStale) {
     }
 
     tbody.innerHTML = items.map(item => renderInventoryRow(item, data.today, data.expiry_cutoff)).join('');
+
+    // Re-apply whatever search term is currently typed, so the filter
+    // survives a live refresh, an offline fallback, or coming back online
+    // -- without this, typing a filter then having loadInventory() run
+    // again in the background would silently show all rows again.
+    const searchInput = document.getElementById('inventorySearchInput');
+    if (searchInput) {
+        applyInventorySearch(searchInput.value.trim().toLowerCase());
+    }
+}
+
+function applyInventorySearch(query) {
+    const rows = document.querySelectorAll('#inventoryTableBody tr[data-name]');
+    const noResultsMsg = document.getElementById('noInventoryResultsMsg');
+    let visibleCount = 0;
+
+    rows.forEach((row) => {
+        const matches = row.getAttribute('data-name').includes(query);
+        row.style.display = matches ? '' : 'none';
+        if (matches) visibleCount++;
+    });
+
+    noResultsMsg.style.display = (visibleCount === 0 && query.length > 0 && rows.length > 0) ? 'block' : 'none';
 }
 
 function renderInventoryRow(item, todayStr, cutoffStr) {
@@ -517,7 +558,7 @@ function renderInventoryRow(item, todayStr, cutoffStr) {
         `;
 
     return `
-        <tr>
+        <tr data-name="${cmEscapeHtml(item.name.toLowerCase())}">
             <td><span class="badge bg-secondary">${cmEscapeHtml(item.category)}</span></td>
             <td><strong>${cmEscapeHtml(item.name)}</strong></td>
             <td>${item.qty}</td>

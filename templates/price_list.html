@@ -56,6 +56,14 @@
         <!-- Price List Table -- rows rendered by JS from /api/price_list
              or the last cached snapshot, never embedded server-side, so
              the page shell itself stays cacheable for offline viewing. -->
+        <div class="mb-3">
+            <input type="text" id="priceSearchInput" class="form-control" placeholder="🔍 Search by item name..." autocomplete="off">
+        </div>
+
+        <div id="noPriceResultsMsg" class="text-center text-muted py-4" style="display: none;">
+            No items match your search.
+        </div>
+
         <div class="table-responsive">
             <table class="table table-striped align-middle">
                 <thead class="table-dark">
@@ -118,6 +126,14 @@ let isOfflineMode = false;
 document.addEventListener('DOMContentLoaded', function () {
     loadPriceList();
     window.addEventListener('online', loadPriceList);
+
+    // Table filter -- separate from the Add form's autocomplete below,
+    // this just shows/hides already-rendered rows, same pattern as
+    // queue.html's applySearch() and inventory.html's applyInventorySearch().
+    const priceSearchInput = document.getElementById('priceSearchInput');
+    priceSearchInput.addEventListener('input', function () {
+        applyPriceSearch(this.value.trim().toLowerCase());
+    });
 
     // --- Autocomplete Logic (source data now loaded async, listener
     //     itself only needs to be attached once) ---
@@ -233,6 +249,27 @@ function renderPriceList(data, isStale) {
 
     tbody.innerHTML = items.map(renderPriceRow).join('');
     attachRowHandlers();
+
+    // Re-apply whatever search term is currently typed, so the filter
+    // survives a live refresh, an offline fallback, or coming back online.
+    const searchInput = document.getElementById('priceSearchInput');
+    if (searchInput) {
+        applyPriceSearch(searchInput.value.trim().toLowerCase());
+    }
+}
+
+function applyPriceSearch(query) {
+    const rows = document.querySelectorAll('#priceTableBody tr[data-name]');
+    const noResultsMsg = document.getElementById('noPriceResultsMsg');
+    let visibleCount = 0;
+
+    rows.forEach((row) => {
+        const matches = row.getAttribute('data-name').includes(query);
+        row.style.display = matches ? '' : 'none';
+        if (matches) visibleCount++;
+    });
+
+    noResultsMsg.style.display = (visibleCount === 0 && query.length > 0 && rows.length > 0) ? 'block' : 'none';
 }
 
 function renderPriceRow(item) {
@@ -265,7 +302,7 @@ function renderPriceRow(item) {
         `;
 
     return `
-        <tr class="${isOutOfStock ? 'opacity-50' : ''}">
+        <tr class="${isOutOfStock ? 'opacity-50' : ''}" data-name="${cmEscapeHtml(item.item_name.toLowerCase())}">
             <td>${item.id}</td>
             <td><span class="badge bg-info text-dark">${cmEscapeHtml(item.item_type)}</span></td>
             <td><strong>${cmEscapeHtml(item.item_name)}</strong> ${stockBadge}</td>
