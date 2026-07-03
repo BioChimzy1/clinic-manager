@@ -3367,11 +3367,7 @@ def staff():
     return render_template('staff.html', staff_list=staff_list, role=session.get('role'))
     
     
-@app.route('/dashboard')
-def dashboard():
-    clinic_id = get_current_clinic_id()
-    if not clinic_id:
-        return redirect(url_for('setup_clinic'))
+def get_dashboard_data(clinic_id):
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
 
@@ -3384,14 +3380,13 @@ def dashboard():
 
     total_queue_count = waiting_count + pending_count
 
-    # --- FIXED: "Seen Today" (Consultation + Retail + Old Loan Repayments) ---
+    # --- "Seen Today" (Consultation + Retail + Old Loan Repayments) ---
     today = datetime.date.today()
     today_start = today.isoformat() + 'T00:00:00'
     today_end = today.isoformat() + 'T23:59:59'
 
     cursor.execute('''
         SELECT COUNT(DISTINCT unique_id) FROM (
-            -- 1. Consultation visits started today (includes Paid, Ready, Loan Active)
             SELECT id AS unique_id
             FROM visits
             WHERE clinic_id = ? 
@@ -3400,7 +3395,6 @@ def dashboard():
             
             UNION
             
-            -- 2. Retail sales created today
             SELECT id AS unique_id
             FROM visits
             WHERE clinic_id = ? 
@@ -3409,7 +3403,6 @@ def dashboard():
             
             UNION
             
-            -- 3. Loan payments made today on OLDER visits (visit created before today)
             SELECT loan_payments.visit_id AS unique_id
             FROM loan_payments
             JOIN visits ON loan_payments.visit_id = visits.id
@@ -3441,11 +3434,11 @@ def dashboard():
     cursor.execute("SELECT COUNT(*) FROM price_list WHERE clinic_id = ? AND is_active = 1", (clinic_id,))
     priced_items_count = cursor.fetchone()[0]
 
-    # --- Cashier stats: brand-new visits awaiting a first payment ---
+    # --- Cashier stats ---
     cursor.execute("SELECT COUNT(*) FROM visits WHERE clinic_id = ? AND status = 'Ready for Cashier'", (clinic_id,))
     cashier_count = cursor.fetchone()[0]
 
-    # --- Loans stats: everyone with an active loan, consultation or retail ---
+    # --- Loans stats ---
     cursor.execute("SELECT COUNT(*) FROM visits WHERE clinic_id = ? AND status = 'Loan Active'", (clinic_id,))
     loans_count = cursor.fetchone()[0]
 
@@ -3468,29 +3461,53 @@ def dashboard():
     today_cash_from_loans = cursor.fetchone()[0] or 0
 
     today_cash_collected = today_cash_direct + today_cash_from_loans
-    
+
     # --- Appointments stats ---
     cursor.execute("SELECT COUNT(*) FROM appointments WHERE clinic_id = ? AND status IN ('Pending', 'Scheduled')", (clinic_id,))
     appointments_count = cursor.fetchone()[0]
-    
+
     conn.close()
-    
+
+    return {
+        'waiting_count': waiting_count,
+        'pending_count': pending_count,
+        'total_queue_count': total_queue_count,
+        'seen_today_count': seen_today_count,
+        'total_items_count': total_items_count,
+        'low_stock_count': low_stock_count,
+        'expiring_soon_count': expiring_soon_count,
+        'priced_items_count': priced_items_count,
+        'cashier_count': cashier_count,
+        'loans_count': loans_count,
+        'today_cash_collected': today_cash_collected,
+        'appointments_count': appointments_count,
+    }
+
+
+@app.route('/dashboard')
+def dashboard():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
+
+    stats = get_dashboard_data(clinic_id)
+
     return render_template(
         'dashboard.html',
         role=session.get('role'),
-        waiting_count=waiting_count,
-        pending_count=pending_count,
-        total_queue_count=total_queue_count,
-        seen_today_count=seen_today_count,
-        total_items_count=total_items_count,
-        low_stock_count=low_stock_count,
-        expiring_soon_count=expiring_soon_count,
-        priced_items_count=priced_items_count,
-        cashier_count=cashier_count,
-        loans_count=loans_count,
-        today_cash_collected=today_cash_collected,
-        appointments_count=appointments_count
+        **stats
     )
+
+
+@app.route('/api/dashboard')
+def api_dashboard():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return jsonify({'error': 'no_clinic'}), 400
+
+    stats = get_dashboard_data(clinic_id)
+    stats['fetched_at'] = datetime.datetime.now().isoformat()
+    return jsonify(stats)
 
 # ------------------------------------------------------------------
 # ABOUT & CONTACT PAGES

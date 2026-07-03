@@ -14,11 +14,12 @@
 // ------------------------------------------------------------------
 
 const CM_DB_NAME = 'cm_outbox_v1';
-const CM_DB_VERSION = 4;                              // was 3
+const CM_DB_VERSION = 5;                              // was 4
 const STORE_QUEUE_REG = 'queue_registrations';
 const STORE_QUEUE_SNAPSHOT = 'queue_snapshot';
 const STORE_PRICE_LIST_SNAPSHOT = 'price_list_snapshot';
-const STORE_INVENTORY_SNAPSHOT = 'inventory_snapshot';   // NEW
+const STORE_INVENTORY_SNAPSHOT = 'inventory_snapshot';
+const STORE_DASHBOARD_SNAPSHOT = 'dashboard_snapshot';   // NEW
 
 function cmOpenDB() {
   return new Promise((resolve, reject) => {
@@ -34,8 +35,11 @@ function cmOpenDB() {
       if (!db.objectStoreNames.contains(STORE_PRICE_LIST_SNAPSHOT)) {
         db.createObjectStore(STORE_PRICE_LIST_SNAPSHOT, { keyPath: 'key' });
       }
-      if (!db.objectStoreNames.contains(STORE_INVENTORY_SNAPSHOT)) {   // NEW
+      if (!db.objectStoreNames.contains(STORE_INVENTORY_SNAPSHOT)) {
         db.createObjectStore(STORE_INVENTORY_SNAPSHOT, { keyPath: 'key' });
+    }
+      if (!db.objectStoreNames.contains(STORE_DASHBOARD_SNAPSHOT)) {   // NEW
+        db.createObjectStore(STORE_DASHBOARD_SNAPSHOT, { keyPath: 'key' });
     }
     };
     req.onsuccess = () => resolve(req.result);
@@ -139,6 +143,24 @@ function cmGetInventorySnapshot() {
     return cmOpenDB().then((db) => new Promise((resolve, reject) => {
         const tx = db.transaction(STORE_INVENTORY_SNAPSHOT, 'readonly');
         const req = tx.objectStore(STORE_INVENTORY_SNAPSHOT).get('current');
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+    }));
+}
+
+function cmSaveDashboardSnapshot(data) {
+    return cmOpenDB().then((db) => new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_DASHBOARD_SNAPSHOT, 'readwrite');
+        tx.objectStore(STORE_DASHBOARD_SNAPSHOT).put({ key: 'current', ...data });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    }));
+}
+
+function cmGetDashboardSnapshot() {
+    return cmOpenDB().then((db) => new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_DASHBOARD_SNAPSHOT, 'readonly');
+        const req = tx.objectStore(STORE_DASHBOARD_SNAPSHOT).get('current');
         req.onsuccess = () => resolve(req.result || null);
         req.onerror = () => reject(req.error);
     }));
