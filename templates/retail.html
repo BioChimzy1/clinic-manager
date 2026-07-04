@@ -43,7 +43,7 @@
                             <option value="">-- Select an item --</option>
                             {% for item in items %}
                             <option value="{{ item[0] }}" data-price="{{ item[3] }}" data-pack="{{ item[4] }}" data-name="{{ item[1] }}" data-type="{{ item[2] }}">
-                                {{ item[1] }} ({{ item[2] }}) - MK {{ "%.2f"|format(item[3] / 100) }} - {{ item[4] }} units
+                                {{ item[1] }} ({{ item[2] }}) - MK {{ "%.2f"|format(item[3] / 100) }} - {{ item[4] }} units{% if item[5] is not none %} - 📦 {{ item[6] }} in stock{% endif %}
                             </option>
                             {% endfor %}
                         </select>

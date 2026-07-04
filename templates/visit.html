@@ -276,7 +276,9 @@ document.addEventListener('DOMContentLoaded', function () {
             div.style.cursor = selectable ? 'pointer' : 'not-allowed';
 
             let statusBadge = '';
+            let qtyLabel = '';
             if (!item.noStockConcept) {
+                qtyLabel = ` <strong>${item.usableQty}</strong> in stock`;
                 if (item.usableQty > 0 && item.expiredQty === 0) {
                     statusBadge = '<span class="badge bg-success ms-1">✅ Available</span>';
                 } else if (item.usableQty > 0 && item.expiredQty > 0) {
@@ -288,7 +290,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
             }
 
-            div.innerHTML = `<strong>${item.name}</strong> <small class="text-muted">(${item.type}, ${formatMK(item.price)} per pack of ${item.defaultQuantity})</small> ${statusBadge}`;
+            div.innerHTML = `<strong>${item.name}</strong> <small class="text-muted">(${item.type}, ${formatMK(item.price)} per pack of ${item.defaultQuantity}${qtyLabel})</small> ${statusBadge}`;
 
             if (selectable) {
                 div.addEventListener('click', () => addItem(item));

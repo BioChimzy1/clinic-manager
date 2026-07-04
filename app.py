@@ -2514,12 +2514,27 @@ def retail():
     # GET: Show the retail form
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
+
+    # Same usable-stock join used in /retail/create_draft, reused here
+    # rather than reimplemented, so the number shown to the operator
+    # before adding an item to the cart can never drift from the number
+    # actually enforced when the sale is validated.
+    today_str = datetime.date.today().isoformat()
     cursor.execute('''
-        SELECT id, item_name, item_type, price, quantity
+        SELECT price_list.id, price_list.item_name, price_list.item_type, price_list.price,
+               price_list.quantity AS pack_quantity, price_list.inventory_id,
+               COALESCE(stock.usable_qty, 0) AS usable_qty
         FROM price_list
-        WHERE clinic_id = ? AND is_active = 1
-        ORDER BY item_name
-    ''', (clinic_id,))
+        LEFT JOIN inventory AS linked_item ON price_list.inventory_id = linked_item.id
+        LEFT JOIN (
+            SELECT LOWER(TRIM(item_name)) AS name_key, category,
+                   SUM(CASE WHEN expiry_date >= ? THEN quantity ELSE 0 END) AS usable_qty
+            FROM inventory WHERE is_active = 1 GROUP BY name_key, category
+        ) AS stock ON stock.name_key = LOWER(TRIM(linked_item.item_name))
+                 AND stock.category = linked_item.category
+        WHERE price_list.clinic_id = ? AND price_list.is_active = 1
+        ORDER BY price_list.item_name
+    ''', (today_str, clinic_id))
     items = cursor.fetchall()
     conn.close()
 

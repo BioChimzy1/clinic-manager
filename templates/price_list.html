@@ -279,11 +279,11 @@ function renderPriceRow(item) {
     if (item.no_stock_concept === 1) {
         stockBadge = '';
     } else if (item.usable_qty > 0 && item.expired_qty === 0) {
-        stockBadge = '<span class="badge bg-success ms-1">✅ Available</span>';
+        stockBadge = `<span class="badge bg-success ms-1">📦 ${item.usable_qty} in stock</span>`;
     } else if (item.usable_qty > 0 && item.expired_qty > 0) {
-        stockBadge = '<span class="badge bg-success ms-1">✅ Available</span> <span class="badge bg-warning text-dark ms-1">⚠️ Some stock expired</span>';
+        stockBadge = `<span class="badge bg-success ms-1">📦 ${item.usable_qty} in stock</span> <span class="badge bg-warning text-dark ms-1">⚠️ ${item.expired_qty} expired</span>`;
     } else if (item.usable_qty === 0 && item.expired_qty > 0) {
-        stockBadge = '<span class="badge" style="background-color: #6f0000; color: #fff;">⛔ Available but expired</span>';
+        stockBadge = `<span class="badge" style="background-color: #6f0000; color: #fff;">⛔ ${item.expired_qty} expired, 0 usable</span>`;
     } else {
         stockBadge = '<span class="badge bg-secondary ms-1">🚫 Out of stock</span>';
     }
