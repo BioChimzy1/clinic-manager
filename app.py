@@ -3,10 +3,44 @@ import sqlite3
 import datetime
 import uuid
 import math
+from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, send_from_directory, session, flash, jsonify
 from werkzeug.security import check_password_hash, generate_password_hash
+from roles_permissions import has_permission
 
 app = Flask(__name__)
+
+# ------------------------------------------------------------------
+# PERMISSION DECORATOR
+# ------------------------------------------------------------------
+def require_permission(permission, json_response=False):
+    """Gate a route behind a permission string from roles_permissions_improved.py.
+
+    json_response=False (default): behaves like the existing HTML routes —
+        flashes a message and redirects to the dashboard on denial.
+    json_response=True: behaves like the existing JSON API routes —
+        returns {'success': False, 'error': ...} instead of redirecting,
+        since those are called from fetch() and a redirect would just be
+        swallowed by the JS.
+
+    This is purely a drop-in replacement for the old
+        allowed_roles = [...]
+        if user_role not in allowed_roles: ...
+    pattern — it doesn't change who is allowed to do what beyond what's
+    defined in PERMISSIONS.
+    """
+    def decorator(view_func):
+        @wraps(view_func)
+        def wrapped(*args, **kwargs):
+            user_role = session.get('role', '')
+            if not has_permission(user_role, permission):
+                if json_response:
+                    return {'success': False, 'error': 'Permission denied.'}
+                flash('You do not have permission to do that.', 'danger')
+                return redirect(url_for('dashboard'))
+            return view_func(*args, **kwargs)
+        return wrapped
+    return decorator
 
 # THIS IS REQUIRED FOR LOGIN SESSIONS TO WORK
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-only-fallback-do-not-use-in-prod')
@@ -3092,6 +3126,7 @@ def delete_expense(expense_id):
 # STAFF MANAGEMENT ROUTES
 # ------------------------------------------------------------------
 @app.route('/staff/add', methods=['POST'])
+@require_permission('staff.add', json_response=True)
 def add_staff():
     """Add a staff member to the current clinic.
 
@@ -3104,12 +3139,7 @@ def add_staff():
     clinic_id = get_current_clinic_id()
     if not clinic_id:
         return {'success': False, 'error': 'No clinic selected.'}
-    
-    allowed_roles = ['admin', 'doctor']
-    user_role = session.get('role', '').lower()
-    if user_role not in allowed_roles:
-        return {'success': False, 'error': 'Permission denied.'}
-    
+
     full_name = request.form.get('full_name', '').strip()
     role = request.form.get('role', '').strip()
     username = request.form.get('username', '').strip()
@@ -3182,17 +3212,13 @@ def add_staff():
 
 
 @app.route('/staff/edit', methods=['POST'])
+@require_permission('staff.edit', json_response=True)
 def edit_staff():
     """Edit an existing staff member"""
     clinic_id = get_current_clinic_id()
     if not clinic_id:
         return {'success': False, 'error': 'No clinic selected.'}
-    
-    allowed_roles = ['admin', 'doctor']
-    user_role = session.get('role', '').lower()
-    if user_role not in allowed_roles:
-        return {'success': False, 'error': 'Permission denied.'}
-    
+
     staff_id = request.form.get('staff_id')
     full_name = request.form.get('full_name', '').strip()
     role = request.form.get('role', '').strip()
@@ -3277,17 +3303,13 @@ def edit_staff():
 
 
 @app.route('/staff/deactivate/<int:staff_id>', methods=['POST'])
+@require_permission('staff.deactivate', json_response=True)
 def deactivate_staff(staff_id):
     """Soft-deactivate a staff member (deactivation is account-wide, across all their clinics)"""
     clinic_id = get_current_clinic_id()
     if not clinic_id:
         return {'success': False, 'error': 'No clinic selected.'}
-    
-    allowed_roles = ['admin', 'doctor']
-    user_role = session.get('role', '').lower()
-    if user_role not in allowed_roles:
-        return {'success': False, 'error': 'Permission denied.'}
-    
+
     # Prevent self-deactivation
     if staff_id == session.get('staff_id'):
         return {'success': False, 'error': 'You cannot deactivate your own account.'}
@@ -3315,17 +3337,13 @@ def deactivate_staff(staff_id):
 
 
 @app.route('/staff/reactivate/<int:staff_id>', methods=['POST'])
+@require_permission('staff.reactivate', json_response=True)
 def reactivate_staff(staff_id):
     """Reactivate a deactivated staff member"""
     clinic_id = get_current_clinic_id()
     if not clinic_id:
         return {'success': False, 'error': 'No clinic selected.'}
-    
-    allowed_roles = ['admin', 'doctor']
-    user_role = session.get('role', '').lower()
-    if user_role not in allowed_roles:
-        return {'success': False, 'error': 'Permission denied.'}
-    
+
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
     
@@ -3353,18 +3371,12 @@ def reactivate_staff(staff_id):
 # STAFF MANAGEMENT
 # ------------------------------------------------------------------
 @app.route('/staff', methods=['GET'])
+@require_permission('staff.view')
 def staff():
     clinic_id = get_current_clinic_id()
     if not clinic_id:
         return redirect(url_for('setup_clinic'))
-    
-    # Only Admin and Doctor can manage staff
-    allowed_roles = ['admin', 'doctor']
-    user_role = session.get('role', '').lower()
-    if user_role not in allowed_roles:
-        flash('You do not have permission to manage staff.', 'danger')
-        return redirect(url_for('dashboard'))
-    
+
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
     
