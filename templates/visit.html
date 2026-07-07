@@ -18,12 +18,18 @@
             <a href="/queue" class="btn btn-secondary btn-sm">← Back to Queue</a>
         </div>
 
+        {% if prefill_return_reason is not none or prefill_items %}
+        <div class="alert alert-warning">
+            ↩ Returned by cashier{% if prefill_return_reason %}: {{ prefill_return_reason }}{% else %}, no reason given{% endif %}
+        </div>
+        {% endif %}
+
         <form action="/visit/{{ patient_id }}" method="POST" id="visitForm">
 
             <!-- Diagnosis -->
             <div class="mb-4">
                 <label class="form-label fw-bold">Diagnosis <span class="text-danger">*</span></label>
-                <textarea name="diagnosis" class="form-control" rows="3" placeholder="e.g. Malaria, uncomplicated" required></textarea>
+                <textarea name="diagnosis" class="form-control" rows="3" placeholder="e.g. Malaria, uncomplicated" required>{{ prefill_diagnosis or '' }}</textarea>
             </div>
 
             <!-- Item search + add -->
@@ -87,6 +93,15 @@ document.addEventListener('DOMContentLoaded', function () {
             expiredQty: {{ item[6] }},
             noStockConcept: {{ 'true' if item[7] == 1 else 'false' }}
         },
+        {% endfor %}
+    ];
+
+    // Items from the previous (returned-by-cashier) visit for this same
+    // appointment, if any -- used below to pre-populate the selected
+    // table instead of opening blank. Empty for a normal fresh visit.
+    const prefillItems = [
+        {% for it in prefill_items %}
+        { id: "{{ it.id }}", qty: {{ it.qty }} },
         {% endfor %}
     ];
 
@@ -328,6 +343,24 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
     });
+
+    // Pre-populate the selected-items table from the previous
+    // (returned) visit, if any. Items no longer active in the price
+    // list (deleted/deactivated since the original visit) are quietly
+    // skipped rather than blocking the form -- there is nothing
+    // sensible to add back for them. Quantities aren't re-validated
+    // against current stock here; the existing max/warning logic in
+    // the qty input already covers that the moment the doctor touches
+    // the quantity, same as any other selection.
+    prefillItems.forEach(function (entry) {
+        const item = allItems.find(function (i) { return i.id === entry.id; });
+        if (item) {
+            selected.set(item.id, { item: item, qty: entry.qty });
+        }
+    });
+    if (selected.size > 0) {
+        renderSelectedTable();
+    }
 });
 </script>
 {% endblock %}

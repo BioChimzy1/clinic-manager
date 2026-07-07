@@ -114,9 +114,17 @@ function renderQueueRow(p) {
         ? '<span class="badge bg-primary">Appointment</span>'
         : '<span class="badge bg-success">Walk-In</span>';
 
-    const statusBadge = p.status === 'Pending'
-        ? '<span class="badge bg-info text-dark">Pending</span>'
-        : '<span class="badge bg-warning text-dark">Waiting</span>';
+    let statusBadge;
+    if (p.status === 'Pending') {
+        statusBadge = '<span class="badge bg-info text-dark">Pending</span>';
+    } else if (p.status === 'Returned to Doctor') {
+        // Sent back by the cashier before payment -- distinct from a
+        // fresh Waiting arrival so the doctor knows this one needs a
+        // fix, not a first-time consult.
+        statusBadge = '<span class="badge" style="background-color:#b8860b;color:#fff;">↩ Returned by Cashier</span>';
+    } else {
+        statusBadge = '<span class="badge bg-warning text-dark">Waiting</span>';
+    }
 
     const actionBtn = p.status === 'Pending'
         ? `<a href="/appointments/review/${p.id}" class="btn btn-outline-warning btn-sm" style="white-space: nowrap;">📋 Review</a>`

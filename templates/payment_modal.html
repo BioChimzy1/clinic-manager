@@ -152,6 +152,13 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <!-- Shared by both Cashier (consultation) and Retail: sends
+                     the not-yet-paid visit back for editing instead of
+                     paying now. Each page wires its own click handler
+                     since "send back" means something different in each
+                     context (back to the doctor vs. back into the live
+                     retail cart) -- see cashier.html / retail.html. -->
+                <button type="button" class="btn btn-outline-warning" id="sendBackBtn">↩ Send Back</button>
                 <button type="button" class="btn btn-success" id="confirmPaymentBtn">✅ Confirm & Complete</button>
             </div>
         </div>

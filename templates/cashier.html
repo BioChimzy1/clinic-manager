@@ -81,6 +81,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const paymentModal = new bootstrap.Modal(document.getElementById('paymentModal'));
     let currentVisitId = null;
     let currentTotal = 0;
+    let currentPatientName = '';
 
     // Populate Staff Witness Dropdown
     fetch('/api/staff/list')
@@ -103,6 +104,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const currentPaid = parseInt(this.getAttribute('data-paid'));
             const currentStatus = this.getAttribute('data-status');
             const patientName = this.getAttribute('data-patient');
+            currentPatientName = patientName;
 
             document.getElementById('modalPatientName').textContent = patientName;
             document.getElementById('modalTotalFee').textContent = 'MK ' + (currentTotal / 100).toFixed(2);
@@ -339,6 +341,54 @@ document.addEventListener('DOMContentLoaded', function() {
         const btn = document.getElementById('confirmPaymentBtn');
         btn.disabled = false;
         btn.textContent = '✅ Confirm & Complete';
+    });
+
+    // --- Send Back to Doctor ---
+    // Lives inside the Process Payment modal (not the list row) so the
+    // cashier always sees the actual invoice items before deciding to
+    // send this back rather than charge it now. Never touches
+    // inventory or payment state -- just flips the visit/appointment
+    // status and puts the patient back at the front of the Queue so
+    // the doctor can fix and resave the visit.
+    document.getElementById('sendBackBtn').addEventListener('click', function() {
+        if (!currentVisitId) {
+            alert('Error: Visit ID is missing. Please refresh and try again.');
+            return;
+        }
+
+        const reason = prompt(`Send ${currentPatientName} back to the doctor. What needs fixing? (optional, helps the doctor)`);
+        if (reason === null) return; // cancelled the prompt
+
+        if (!confirm(`Send ${currentPatientName} back to the doctor? They will reappear at the front of the Queue instead of being charged now.`)) {
+            return;
+        }
+
+        const btn = this;
+        btn.disabled = true;
+        btn.textContent = 'Sending...';
+
+        fetch('/cashier/send_back/' + currentVisitId, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reason: reason.trim() })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                document.getElementById('paymentModal').querySelector('.btn-close').click();
+                location.reload();
+            } else {
+                alert('Error: ' + (data.error || 'Could not send this visit back to the doctor.'));
+                btn.disabled = false;
+                btn.textContent = '↩ Send Back';
+            }
+        })
+        .catch(err => {
+            console.error(err);
+            alert('Network error. Please try again.');
+            btn.disabled = false;
+            btn.textContent = '↩ Send Back';
+        });
     });
 });
 </script>

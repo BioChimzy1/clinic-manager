@@ -79,6 +79,10 @@ PERMISSIONS = {
     "payment.process_loan": {"admin", "cashier", "doctor"},
     "payment.apply_discount": {"admin", "cashier", "doctor"},
     "payment.apply_rounding": {"admin", "cashier", "doctor"},
+    # Cashier sends a not-yet-paid visit back for editing -- either to
+    # the doctor (consultation) or back into the live cart (retail).
+    # Same role set as cashier.view since it's a cashier-side action.
+    "cashier.send_back": {"admin", "cashier", "doctor"},
 
     # Loans / Credit Accounting
     # loan.view_list is separate from loan.view: the /loans list route has

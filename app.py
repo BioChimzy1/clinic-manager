@@ -316,6 +316,12 @@ def init_db():
             payment_reference TEXT,
             medical_aid_company TEXT,
             is_retail INTEGER DEFAULT 0,
+            -- Set when a cashier sends this visit back before payment
+            -- (either to the doctor for a consultation, or back into
+            -- the live retail cart for a retail sale). Kept on the OLD
+            -- visit row for history/display -- the new visit created
+            -- when the person redoes it does not carry this over.
+            return_reason TEXT,
             -- NEW COLUMNS END HERE --
 
             FOREIGN KEY (clinic_id) REFERENCES clinics (id),
@@ -880,9 +886,14 @@ def get_queue_data(clinic_id):
                appointments.appointment_type, appointments.status
         FROM patients
         JOIN appointments ON patients.id = appointments.patient_id
-        WHERE appointments.status IN ('Waiting', 'Pending')
+        WHERE appointments.status IN ('Waiting', 'Pending', 'Returned to Doctor')
           AND appointments.clinic_id = ?
-        ORDER BY appointments.created_at ASC
+        ORDER BY
+            -- Bumped-back patients go to the very front of the queue --
+            -- they were already seen once and are just missing a fix,
+            -- not a fresh arrival who should wait behind everyone else.
+            CASE WHEN appointments.status = 'Returned to Doctor' THEN 0 ELSE 1 END,
+            appointments.created_at ASC
     ''', (clinic_id,))
     queue_list = cursor.fetchall()
     conn.close()
@@ -956,7 +967,7 @@ def appointments():
             patients.sex
         FROM appointments
         JOIN patients ON appointments.patient_id = patients.id
-        WHERE appointments.status NOT IN ('Waiting', 'Pending', 'In Progress', 'Completed')
+        WHERE appointments.status NOT IN ('Waiting', 'Pending', 'In Progress', 'Completed', 'Returned to Doctor')
           AND appointments.clinic_id = ?
         ORDER BY appointments.appointment_date ASC
     ''', (clinic_id,))
@@ -1722,7 +1733,7 @@ def visit(patient_id):
                appointments.id, appointments.appointment_type, appointments.status
         FROM patients
         JOIN appointments ON patients.id = appointments.patient_id
-        WHERE patients.id = ? AND appointments.status IN ('Waiting', 'Pending') 
+        WHERE patients.id = ? AND appointments.status IN ('Waiting', 'Pending', 'Returned to Doctor') 
         ORDER BY appointments.created_at DESC
         LIMIT 1
     ''', (patient_id,))
@@ -1743,7 +1754,18 @@ def visit(patient_id):
         # this exact appointment_id, this POST is a duplicate of one
         # that already succeeded, not a legitimate second visit. Catch
         # it here, before doing any other work or touching inventory.
-        cursor.execute('SELECT id FROM visits WHERE appointment_id = ?', (appointment_id,))
+        #
+        # 'Returned to Doctor' visits are excluded from this check on
+        # purpose: that status means the cashier bounced a PRIOR visit
+        # back before taking any payment, and the appointment itself
+        # was reopened to 'Returned to Doctor' so the doctor could redo
+        # it. The old visit row is kept only as a historical record --
+        # it must never block the doctor from saving the real, current
+        # visit for this same appointment_id.
+        cursor.execute(
+            "SELECT id FROM visits WHERE appointment_id = ? AND status != 'Returned to Doctor'",
+            (appointment_id,)
+        )
         existing_visit = cursor.fetchone()
         if existing_visit is not None:
             conn.close()
@@ -1918,6 +1940,36 @@ def visit(patient_id):
     ''', (today_str, today_str, clinic_id))
     all_priced_items = cursor.fetchall()
 
+    # If the cashier sent this visit back, pull the previous diagnosis,
+    # reason, and item selections so the form opens pre-filled instead
+    # of blank -- the doctor is fixing one thing, not redoing the whole
+    # visit from memory. Only relevant when the appointment is actually
+    # in the 'Returned to Doctor' state (checked above via
+    # appointment_status); a completely fresh Waiting/Pending patient
+    # has no such prior visit to look up.
+    prefill_diagnosis = None
+    prefill_return_reason = None
+    prefill_items = []
+
+    if appointment_status == 'Returned to Doctor':
+        cursor.execute('''
+            SELECT id, diagnosis, return_reason
+            FROM visits
+            WHERE appointment_id = ? AND status = 'Returned to Doctor'
+            ORDER BY created_at DESC
+            LIMIT 1
+        ''', (appointment_id,))
+        prev_visit = cursor.fetchone()
+
+        if prev_visit:
+            prev_visit_id, prefill_diagnosis, prefill_return_reason = prev_visit
+            cursor.execute('''
+                SELECT price_list_id, quantity
+                FROM visit_items
+                WHERE visit_id = ? AND price_list_id IS NOT NULL
+            ''', (prev_visit_id,))
+            prefill_items = [{'id': r[0], 'qty': r[1]} for r in cursor.fetchall()]
+
     conn.close()
 
     return render_template(
@@ -1927,7 +1979,10 @@ def visit(patient_id):
         patient_sex=p_sex,
         patient_dob=p_dob,
         appointment_type=appointment_type,
-        priced_items=all_priced_items
+        priced_items=all_priced_items,
+        prefill_diagnosis=prefill_diagnosis,
+        prefill_return_reason=prefill_return_reason,
+        prefill_items=prefill_items
     )
 
 # ------------------------------------------------------------------
@@ -1998,7 +2053,122 @@ def cashier():
     return render_template('cashier.html', 
                           cashier_list=cashier_list,
                           role=session.get('role'))
-                          
+
+
+# ------------------------------------------------------------------
+# SEND VISIT BACK (before payment)
+# ------------------------------------------------------------------
+# One button, inside the Process Payment modal (so the cashier always
+# sees the actual items before deciding), shared by both the Cashier
+# page (consultation visits) and the Retail page (unpaid drafts) since
+# they both use that same modal. What "send back" means differs by
+# visit type:
+#
+#   - Consultation visit: goes back to 'Returned to Doctor' -- the
+#     appointment reopens in the Queue (front of the line, distinct
+#     badge) and the doctor's /visit/<patient_id> form pre-fills the
+#     same diagnosis + items instead of starting blank, with a banner
+#     showing the cashier's reason.
+#   - Retail sale: reuses the exact same 'Cancelled' status the
+#     existing /retail/cancel draft-cancel already uses (retail
+#     already treats unpaid drafts as disposable/redoable) -- the only
+#     difference is the item list is handed back in the response so
+#     the Retail page can reload them straight into the live, editable
+#     cart instead of the person having to re-search everything.
+#
+# In both cases no inventory is touched: creation/draft time never
+# deducts stock (only /cashier/process does, on actual payment), so
+# there is nothing to reverse -- this is purely a status change plus
+# handing the item list back to the client.
+@app.route('/cashier/send_back/<int:visit_id>', methods=['POST'])
+@require_permission('cashier.send_back', json_response=True)
+def send_back_visit(visit_id):
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return jsonify({'success': False, 'error': 'no_clinic'}), 400
+
+    reason = (request.get_json(silent=True) or {}).get('reason', '').strip() or None
+
+    conn = sqlite3.connect('clinic.db')
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        SELECT visits.status, visits.appointment_id, visits.is_retail, patients.name
+        FROM visits
+        LEFT JOIN patients ON visits.patient_id = patients.id
+        WHERE visits.id = ? AND visits.clinic_id = ?
+    ''', (visit_id, clinic_id))
+    row = cursor.fetchone()
+
+    if row is None:
+        conn.close()
+        return jsonify({'success': False, 'error': 'Visit not found.'}), 404
+
+    status, appointment_id, is_retail, patient_name = row
+
+    if status != 'Ready for Cashier':
+        conn.close()
+        return jsonify({'success': False, 'error': f'This visit is "{status}" and can no longer be sent back (already paid or on a loan).'}), 400
+
+    # Grab the item list BEFORE any status change, so it can be handed
+    # back to the client to repopulate the cart/visit form with.
+    cursor.execute('''
+        SELECT price_list_id, item_type, item_name, quantity, price_per_unit
+        FROM visit_items
+        WHERE visit_id = ?
+    ''', (visit_id,))
+    items = [
+        {
+            'price_list_id': r[0],
+            'type': r[1],
+            'name': r[2],
+            'qty': r[3],
+            'price_per_unit': r[4]
+        }
+        for r in cursor.fetchall()
+    ]
+
+    now = datetime.datetime.now().isoformat()
+
+    if is_retail:
+        cursor.execute('''
+            UPDATE visits SET status = 'Cancelled', return_reason = ?, updated_at = ?
+            WHERE id = ? AND status = 'Ready for Cashier'
+        ''', (reason, now, visit_id))
+
+        if cursor.rowcount == 0:
+            conn.close()
+            return jsonify({'success': False, 'error': 'Could not send this sale back -- it may have just been paid.'}), 400
+
+        conn.commit()
+        log_audit('SEND_BACK_RETAIL', 'visits', visit_id,
+                  old_value='Ready for Cashier',
+                  new_value=f"Sent back to Retail cart. Reason: {reason or '(none given)'}")
+        conn.close()
+        return jsonify({'success': True, 'returned_to': 'retail', 'items': items})
+
+    # Consultation visit -> back to the doctor.
+    if appointment_id is None:
+        conn.close()
+        return jsonify({'success': False, 'error': 'This visit has no linked appointment to send back to.'}), 400
+
+    cursor.execute('''
+        UPDATE visits SET status = 'Returned to Doctor', return_reason = ?, updated_at = ? WHERE id = ?
+    ''', (reason, now, visit_id))
+
+    cursor.execute('''
+        UPDATE appointments SET status = 'Returned to Doctor', updated_at = ? WHERE id = ?
+    ''', (now, appointment_id))
+
+    conn.commit()
+    log_audit('SEND_BACK_TO_DOCTOR', 'visits', visit_id,
+              old_value='Ready for Cashier',
+              new_value=f"Returned to Doctor. Patient: {patient_name}. Reason: {reason or '(none given)'}")
+    conn.close()
+
+    return jsonify({'success': True, 'returned_to': 'doctor', 'items': items})
+
+
 @app.route('/cashier/view/<int:visit_id>', methods=['GET'])
 def view_cashier_invoice(visit_id):
     """View-only route to show the items charged for a specific visit.
