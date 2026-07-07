@@ -24,14 +24,21 @@ PERMISSIONS = {
     "patient.delete": {"admin"},
 
     # Appointments
+    # NOTE: cashier included on create/schedule/confirm/cancel/reschedule/
+    # mark_missed/check_in to match live app.py behavior, where cashier has
+    # always had blanket access to appointment management alongside admin,
+    # doctor, and receptionist. appointment.review is a new key added purely
+    # to give review_appointment() a proper permission to gate on (it had
+    # none before).
     "appointment.view": {"admin", "doctor", "pharmacist", "cashier", "receptionist", "nurse"},
-    "appointment.create": {"admin", "doctor", "receptionist"},
-    "appointment.schedule": {"admin", "doctor", "receptionist"},
+    "appointment.create": {"admin", "doctor", "receptionist", "cashier"},
+    "appointment.schedule": {"admin", "doctor"},
     "appointment.confirm": {"admin", "doctor"},
-    "appointment.cancel": {"admin", "doctor", "receptionist"},
-    "appointment.reschedule": {"admin", "doctor", "receptionist"},
-    "appointment.mark_missed": {"admin", "doctor", "receptionist"},
-    "appointment.check_in": {"admin", "doctor", "receptionist", "nurse"},
+    "appointment.cancel": {"admin", "doctor", "receptionist", "cashier"},
+    "appointment.reschedule": {"admin", "doctor", "receptionist", "cashier"},
+    "appointment.mark_missed": {"admin", "doctor", "receptionist", "cashier"},
+    "appointment.check_in": {"admin", "doctor", "receptionist", "nurse", "cashier"},
+    "appointment.review": {"admin", "doctor"},
 
     # Clinical Visits & Labs
     "visit.create": {"admin", "doctor"},
@@ -74,13 +81,22 @@ PERMISSIONS = {
     "payment.apply_rounding": {"admin", "cashier", "doctor"},
 
     # Loans / Credit Accounting
+    # loan.view_list is separate from loan.view: the /loans list route has
+    # always allowed receptionist alongside admin/cashier/doctor, while the
+    # per-visit loan_details() and add_loan_payment() routes never have.
+    # Keeping them as distinct keys avoids granting receptionist access to
+    # loan_details()/add_loan_payment() as a side effect.
     "loan.view": {"admin", "cashier", "doctor"},
+    "loan.view_list": {"admin", "cashier", "doctor", "receptionist"},
     "loan.create": {"admin", "cashier", "doctor"},
     "loan.record_payment": {"admin", "cashier", "doctor"},
     "loan.set_due_date": {"admin", "cashier", "doctor"},
 
     # Standalone Over-the-counter Retail (Drafts Workflows)
-    "retail.view": {"admin", "pharmacist", "cashier"},
+    # doctor included on retail.view to match live app.py behavior (doctor
+    # has always had access to /retail alongside admin/cashier); pharmacist
+    # was already part of this module's intended design.
+    "retail.view": {"admin", "pharmacist", "cashier", "doctor"},
     "retail.create_draft": {"admin", "pharmacist", "cashier"},
     "retail.finalize": {"admin", "pharmacist", "cashier"},
     "retail.cancel_draft": {"admin", "pharmacist", "cashier"},
@@ -89,7 +105,13 @@ PERMISSIONS = {
     "finance.view": {"admin", "doctor", "cashier"},
     "finance.view_transactions": {"admin", "doctor", "cashier"},
     "finance.add_expense": {"admin", "doctor", "cashier", "ground_worker"}, # Ground workers can file expenses
-    "finance.delete_expense": {"admin"},
+    # DELIBERATE CALL, FLAG FOR REVIEW: this was originally {"admin"} only
+    # in this module, which would have been a real tightening vs. live
+    # app.py (admin/cashier/doctor). Reconciled to match what's live today
+    # rather than silently restrict who can delete expenses. If admin-only
+    # is actually what you want here, change this deliberately and confirm
+    # with whoever relies on cashier/doctor having this today.
+    "finance.delete_expense": {"admin", "cashier", "doctor"},
 
     # HR & Staff Auditing
     # NOTE: kept as admin+doctor to match the live app.py behavior

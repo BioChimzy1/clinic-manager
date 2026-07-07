@@ -126,6 +126,7 @@ def get_inventory_data(clinic_id):
     return rows
 
 @app.route('/api/inventory')
+@require_permission('inventory.view', json_response=True)
 def api_inventory():
     clinic_id = get_current_clinic_id()
     if not clinic_id:
@@ -642,13 +643,9 @@ def setup_clinic():
     return render_template('setup_clinic.html')
     
 @app.route('/create_clinic', methods=['POST'])
+@require_permission('clinic.create')
 def create_clinic():
     """Admin-only: Create a new clinic and assign the current admin to it."""
-    # Even if they don't have a clinic yet, we check their role via session
-    if session.get('role', '').lower() != 'admin':
-        flash('Only Admins can create new clinics.', 'danger')
-        return redirect(url_for('dashboard'))
-    
     clinic_name = request.form.get('clinic_name', '').strip()
     phone = request.form.get('phone', '').strip()
     
@@ -798,6 +795,7 @@ def service_worker():
 # ------------------------------------------------------------------
 
 @app.route('/api/queue/register', methods=['POST'])
+@require_permission('queue.register_patient', json_response=True)
 def api_queue_register():
     clinic_id = get_current_clinic_id()
     if not clinic_id:
@@ -891,6 +889,7 @@ def get_queue_data(clinic_id):
     return queue_list
 
 @app.route('/queue')
+@require_permission('queue.view')
 def queue():
     clinic_id = get_current_clinic_id()
     if not clinic_id:
@@ -901,6 +900,7 @@ def queue():
 # queue.html. Same query as the HTML route above via get_queue_data(),
 # so the two never disagree on what "the queue" is.
 @app.route('/api/queue')
+@require_permission('queue.view', json_response=True)
 def api_queue():
     clinic_id = get_current_clinic_id()
     if not clinic_id:
@@ -932,10 +932,7 @@ def appointments():
     clinic_id = get_current_clinic_id()
     if not clinic_id:
         return redirect(url_for('setup_clinic'))
-    """View all scheduled appointments"""
-    allowed_roles = ['admin', 'cashier', 'doctor', 'receptionist']
-    user_role = session.get('role', '').lower()
-    if user_role not in allowed_roles:
+    if not has_permission(session.get('role', ''), 'appointment.view'):
         flash('Permission denied.', 'danger')
         return redirect(url_for('dashboard'))
 
@@ -975,9 +972,7 @@ def schedule_appointment():
     if not clinic_id:
         return redirect(url_for('setup_clinic'))
     """Schedule a new appointment for an existing or new patient"""
-    allowed_roles = ['admin', 'cashier', 'doctor', 'receptionist']
-    user_role = session.get('role', '').lower()
-    if user_role not in allowed_roles:
+    if not has_permission(session.get('role', ''), 'appointment.schedule'):
         flash('Permission denied.', 'danger')
         return redirect(url_for('dashboard'))
     
@@ -1029,14 +1024,25 @@ def update_appointment(appt_id):
     if not clinic_id:
         return redirect(url_for('setup_clinic'))
     """Update appointment status (Confirm, Cancel, Reschedule, Missed, Check In)"""
-    allowed_roles = ['admin', 'cashier', 'doctor', 'receptionist']
-    user_role = session.get('role', '').lower()
-    if user_role not in allowed_roles:
-        flash('Permission denied.', 'danger')
-        return redirect(url_for('dashboard'))
-
     data = request.get_json()
     action = data.get('action')
+
+    # Each action maps to its own permission key in roles_permissions.py,
+    # since 'confirm' and the rest historically weren't gated identically
+    # in the module (they are now reconciled to match live behavior).
+    action_permission = {
+        'confirm': 'appointment.confirm',
+        'cancel': 'appointment.cancel',
+        'reschedule': 'appointment.reschedule',
+        'missed': 'appointment.mark_missed',
+        'check_in': 'appointment.check_in',
+    }
+    permission = action_permission.get(action)
+    if permission is None:
+        return {'success': False, 'error': 'Invalid action'}
+    if not has_permission(session.get('role', ''), permission):
+        return {'success': False, 'error': 'Permission denied.'}
+
     now = datetime.datetime.now().isoformat()
 
     conn = sqlite3.connect('clinic.db')
@@ -1091,9 +1097,7 @@ def review_appointment(patient_id):
     if not clinic_id:
         return redirect(url_for('setup_clinic'))
     """Doctor reviews a pending appointment before confirming it"""
-    allowed_roles = ['admin', 'cashier', 'doctor']
-    user_role = session.get('role', '').lower()
-    if user_role not in allowed_roles:
+    if not has_permission(session.get('role', ''), 'appointment.review'):
         flash('Permission denied.', 'danger')
         return redirect(url_for('dashboard'))
 
@@ -1174,6 +1178,7 @@ def review_appointment(patient_id):
 # INVENTORY MANAGEMENT (Add & Edit)
 # ------------------------------------------------------------------
 @app.route('/inventory', methods=['GET', 'POST'])
+@require_permission('inventory.view')
 def inventory():
     clinic_id = get_current_clinic_id()
     if not clinic_id:
@@ -1182,6 +1187,14 @@ def inventory():
     cursor = conn.cursor()
     
     if request.method == 'POST':
+        # inventory.add and inventory.edit resolve to the same role set
+        # today ({admin, pharmacist}), so one check covers both the
+        # add-new-item and edit-existing-item branches below.
+        if not has_permission(session.get('role', ''), 'inventory.add'):
+            conn.close()
+            flash('You do not have permission to modify inventory.', 'danger')
+            return redirect(url_for('inventory'))
+
         inventory_id = request.form.get('inventory_id')
         category = request.form['category']
         item_name = request.form['item_name'].strip()
@@ -1345,6 +1358,7 @@ def inventory():
 
 
 @app.route('/inventory/reduce/<int:item_id>', methods=['POST'])
+@require_permission('inventory.reduce', json_response=True)
 def reduce_inventory(item_id):
     clinic_id = get_current_clinic_id()
     if not clinic_id:
@@ -1411,6 +1425,7 @@ def reduce_inventory(item_id):
 # PRICE LIST MANAGEMENT
 # ------------------------------------------------------------------
 @app.route('/price_list', methods=['GET', 'POST'])
+@require_permission('price_list.view')
 def price_list():
     clinic_id = get_current_clinic_id()
     if not clinic_id:
@@ -1419,6 +1434,15 @@ def price_list():
     cursor = conn.cursor()
     
     if request.method == 'POST':
+        # price_list.create and price_list.edit resolve to the same role
+        # set today ({admin, pharmacist}); this route only ever creates new
+        # price list entries (updates go through update_price_item()), so
+        # price_list.create is the correct gate here.
+        if not has_permission(session.get('role', ''), 'price_list.create'):
+            conn.close()
+            flash('You do not have permission to add price list items.', 'danger')
+            return redirect(url_for('price_list'))
+
         item_type = request.form['item_type']
         item_name = request.form['item_name']
         price = int(float(request.form['price']) * 100)  # Convert to Tambala
@@ -1506,6 +1530,7 @@ def price_list():
 # offline cache in price_list.html. Same query as the page's own data
 # via get_price_list_data(), so the two never disagree.
 @app.route('/api/price_list')
+@require_permission('price_list.view', json_response=True)
 def api_price_list():
     clinic_id = get_current_clinic_id()
     if not clinic_id:
@@ -1539,6 +1564,7 @@ def api_price_list():
     })    
 
 @app.route('/price_list/update/<int:item_id>', methods=['POST'])
+@require_permission('price_list.edit', json_response=True)
 def update_price_item(item_id):
     clinic_id = get_current_clinic_id()
     if not clinic_id:
@@ -1597,6 +1623,7 @@ def update_price_item(item_id):
         return {'success': False, 'error': str(e)}
 
 @app.route('/price_list/delete/<int:item_id>')
+@require_permission('price_list.delete')
 def delete_price_item(item_id):
     clinic_id = get_current_clinic_id()
     if not clinic_id:
@@ -1617,6 +1644,7 @@ def delete_price_item(item_id):
     return redirect(url_for('price_list'))
     
 @app.route('/price_list/history/<int:item_id>', methods=['GET'])
+@require_permission('price_list.view_history', json_response=True)
 def price_list_history(item_id):
     """Fetch the price history for a specific price_list item."""
     clinic_id = get_current_clinic_id()
@@ -1671,6 +1699,7 @@ def api_staff_list():
     
     
 @app.route('/visit/<int:patient_id>', methods=['GET', 'POST'])
+@require_permission('visit.create')
 def visit(patient_id):
     clinic_id = get_current_clinic_id()
     if not clinic_id:
@@ -1912,10 +1941,7 @@ def cashier():
     """Show brand-new consultation visits awaiting their first payment
     decision (status = 'Ready for Cashier' only). Active loans -- 
     consultation or retail -- live exclusively on /loans instead."""
-    # Role check: Admin, Cashier, or Doctor (case-insensitive)
-    allowed_roles = ['admin', 'cashier', 'doctor']
-    user_role = session.get('role', '').lower()
-    if user_role not in allowed_roles:
+    if not has_permission(session.get('role', ''), 'cashier.view'):
         flash('You do not have permission to access the Cashier page.', 'danger')
         return redirect(url_for('dashboard'))
     
@@ -2022,10 +2048,10 @@ def process_payment(visit_id):
     if not clinic_id:
         return redirect(url_for('setup_clinic'))
     """Process payment for a visit (Full Payment, Discount, or Loan)"""
-    # Role check
-    allowed_roles = ['admin', 'cashier', 'doctor']
-    user_role = session.get('role', '').lower()
-    if user_role not in allowed_roles:
+    # payment.process_full / process_loan / apply_discount all resolve to the
+    # same role set today (admin, cashier, doctor), so one gate covers all
+    # three payment modes handled below.
+    if not has_permission(session.get('role', ''), 'payment.process_full'):
         flash('Permission denied.', 'danger')
         return redirect(url_for('dashboard'))
     
@@ -2347,9 +2373,7 @@ def loans():
     if not clinic_id:
         return redirect(url_for('setup_clinic'))
 
-    allowed_roles = ['admin', 'cashier', 'doctor', 'receptionist']
-    user_role = session.get('role', '').lower()
-    if user_role not in allowed_roles:
+    if not has_permission(session.get('role', ''), 'loan.view_list'):
         flash('You do not have permission to access Loans.', 'danger')
         return redirect(url_for('dashboard'))
 
@@ -2384,10 +2408,7 @@ def loan_details(visit_id):
     if not clinic_id:
         return redirect(url_for('setup_clinic'))
     """View loan payment history for a specific visit"""
-    # Role check
-    allowed_roles = ['admin', 'cashier', 'doctor']
-    user_role = session.get('role', '').lower()
-    if user_role not in allowed_roles:
+    if not has_permission(session.get('role', ''), 'loan.view'):
         flash('Permission denied.', 'danger')
         return redirect(url_for('dashboard'))
     
@@ -2435,10 +2456,7 @@ def add_loan_payment(visit_id):
     if not clinic_id:
         return redirect(url_for('setup_clinic'))
     """Add a new payment toward an outstanding loan"""
-    # Role check
-    allowed_roles = ['admin', 'cashier', 'doctor']
-    user_role = session.get('role', '').lower()
-    if user_role not in allowed_roles:
+    if not has_permission(session.get('role', ''), 'loan.record_payment'):
         flash('Permission denied.', 'danger')
         return redirect(url_for('dashboard'))
     
@@ -2525,9 +2543,7 @@ def retail():
     if not clinic_id:
         return redirect(url_for('setup_clinic'))
     
-    allowed_roles = ['admin', 'cashier', 'doctor']
-    user_role = session.get('role', '').lower()
-    if user_role not in allowed_roles:
+    if not has_permission(session.get('role', ''), 'retail.view'):
         flash('You do not have permission to access Retail Sales.', 'danger')
         return redirect(url_for('dashboard'))
 
@@ -2575,6 +2591,7 @@ def retail():
     return render_template('retail.html', items=items, role=session.get('role'))
 
 @app.route('/retail/create_draft', methods=['POST'])
+@require_permission('retail.create_draft', json_response=True)
 def retail_create_draft():
     clinic_id = get_current_clinic_id()
     if not clinic_id:
@@ -2668,6 +2685,7 @@ def retail_create_draft():
 
 
 @app.route('/retail/pending', methods=['GET'])
+@require_permission('retail.view', json_response=True)
 def retail_pending():
     """List retail drafts awaiting their FIRST payment decision (created
     via create_draft but not yet finalized through /cashier/process).
@@ -2713,6 +2731,7 @@ def retail_pending():
 
 
 @app.route('/retail/cancel/<int:visit_id>', methods=['POST'])
+@require_permission('retail.cancel_draft', json_response=True)
 def retail_cancel(visit_id):
     """Cancel an abandoned retail draft. Only allowed for retail visits
     that are still unpaid/undeducted -- create_draft never deducts
@@ -2918,8 +2937,7 @@ def finance_transactions():
     if not clinic_id:
         return {'error': 'No clinic'}, 403
 
-    allowed_roles = ['admin', 'cashier', 'doctor']
-    if session.get('role', '').lower() not in allowed_roles:
+    if not has_permission(session.get('role', ''), 'finance.view_transactions'):
         return {'error': 'Permission denied'}, 403
 
     period = request.args.get('period', 'today')
@@ -2952,10 +2970,7 @@ def finance():
     if not clinic_id:
         return redirect(url_for('setup_clinic'))
     """Finance dashboard with revenue, loans, discounts, and expenses"""
-    # Role check
-    allowed_roles = ['admin', 'cashier', 'doctor']
-    user_role = session.get('role', '').lower()
-    if user_role not in allowed_roles:
+    if not has_permission(session.get('role', ''), 'finance.view'):
         flash('You do not have permission to access the Finance page.', 'danger')
         return redirect(url_for('dashboard'))
     
@@ -3065,9 +3080,7 @@ def add_expense():
     if not clinic_id:
         return redirect(url_for('setup_clinic'))
     """Add a new expense entry"""
-    allowed_roles = ['admin', 'cashier', 'doctor']
-    user_role = session.get('role', '').lower()
-    if user_role not in allowed_roles:
+    if not has_permission(session.get('role', ''), 'finance.add_expense'):
         flash('Permission denied.', 'danger')
         return redirect(url_for('dashboard'))
     
@@ -3107,9 +3120,7 @@ def delete_expense(expense_id):
     if not clinic_id:
         return redirect(url_for('setup_clinic'))
     """Delete an expense entry"""
-    allowed_roles = ['admin', 'cashier', 'doctor']
-    user_role = session.get('role', '').lower()
-    if user_role not in allowed_roles:
+    if not has_permission(session.get('role', ''), 'finance.delete_expense'):
         flash('Permission denied.', 'danger')
         return redirect(url_for('dashboard'))
     
@@ -3551,15 +3562,11 @@ def contact():
     
     
 @app.route('/audit_log')
+@require_permission('audit.view')
 def view_audit_log():
     clinic_id = get_current_clinic_id()
     if not clinic_id:
         return redirect(url_for('setup_clinic'))
-    
-    # Only Admin can view audit logs
-    if session.get('role', '').lower() != 'admin':
-        flash('Permission denied.', 'danger')
-        return redirect(url_for('dashboard'))
     
     conn = sqlite3.connect('clinic.db')
     conn.row_factory = sqlite3.Row  # <--- THIS is the magic line!
