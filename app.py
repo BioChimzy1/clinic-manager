@@ -2524,29 +2524,10 @@ def process_payment(visit_id):
         return {'success': False, 'error': str(e)}
 
 
-@app.route('/loans', methods=['GET'])
-def loans():
-    """Single combined view of every visit with an active loan, whether
-    it came from a consultation (has a real patient) or a retail sale
-    (patient_id IS NULL, is_retail = 1). This is now the ONLY place
-    loans are browsed from -- /cashier intentionally excludes
-    'Loan Active' visits entirely (it only shows brand-new 'Ready for
-    Cashier' visits), and /retail's pending-drafts list is a separate
-    concept (unpaid drafts, not loans specifically -- a retail loan
-    will appear in both lists, which is correct: one answers "what's
-    an unfinished retail sale", the other answers "who owes money").
-    Linking into loan_details.html from here is what actually lets
-    someone record a repayment; that page's form is already correct
-    (additive, clamped to the real balance, no repeated witness
-    requirement) so no payment logic needed to change here."""
-    clinic_id = get_current_clinic_id()
-    if not clinic_id:
-        return redirect(url_for('setup_clinic'))
-
-    if not has_permission(session.get('role', ''), 'loan.view_list'):
-        flash('You do not have permission to access Loans.', 'danger')
-        return redirect(url_for('dashboard'))
-
+def get_loans_data(clinic_id):
+    """Same query as before, now shared by both the HTML shell route
+    and the JSON API route, so they can never disagree on what an
+    'active loan' is."""
     conn = sqlite3.connect('clinic.db')
     cursor = conn.cursor()
     cursor.execute('''
@@ -2567,9 +2548,49 @@ def loans():
     ''', (clinic_id,))
     loan_list = cursor.fetchall()
     conn.close()
+    return loan_list
 
+
+@app.route('/loans', methods=['GET'])
+@require_permission('loan.view_list')
+def loans():
+    """Shell only now -- loans.html fetches /api/loans on load, same
+    pattern as queue.html. All permission/clinic checks unchanged."""
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return redirect(url_for('setup_clinic'))
+    return render_template('loans.html')
+
+
+@app.route('/api/loans', methods=['GET'])
+@require_permission('loan.view_list', json_response=True)
+def api_loans():
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return jsonify({'error': 'no_clinic'}), 400
+
+    loan_list = get_loans_data(clinic_id)
     today_str = datetime.date.today().isoformat()
-    return render_template('loans.html', loan_list=loan_list, today_str=today_str, role=session.get('role'))
+
+    loans = []
+    for row in loan_list:
+        due_date = row[4]
+        loans.append({
+            'id': row[0],
+            'total_fee': row[1],
+            'amount_paid': row[2],
+            'balance': row[1] - row[2],
+            'witness': row[3],
+            'due_date': due_date,
+            'is_overdue': bool(due_date and due_date < today_str),
+            'is_retail': row[6] == 1,
+            'patient_name': row[7],
+        })
+
+    return jsonify({
+        'loans': loans,
+        'fetched_at': datetime.datetime.now().isoformat()
+    })
 
 
 @app.route('/cashier/loan/<int:visit_id>', methods=['GET'])

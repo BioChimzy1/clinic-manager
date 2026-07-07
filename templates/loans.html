@@ -7,7 +7,7 @@
                 <h3 class="mb-0">💳 Loans</h3>
                 <small class="text-muted">Everyone with an active loan, from a consultation or a retail sale.</small>
             </div>
-            <span class="badge bg-dark fs-6">{{ loan_list|length }} {{ 'loan' if loan_list|length == 1 else 'loans' }} active</span>
+            <span class="badge bg-dark fs-6" id="loanCountBadge">Loading...</span>
         </div>
 
         <div class="mb-3">
@@ -31,69 +31,92 @@
                         <th class="text-end">Action</th>
                     </tr>
                 </thead>
-                <tbody>
-                    {% for loan in loan_list %}
-                    {% set balance = loan[1] - loan[2] %}
-                    {% set is_overdue = loan[4] and loan[4] < today_str %}
-                    <tr data-name="{{ (loan[7] or '🏪 retail sale')|lower }}">
-                        <td>
-                            <strong>{{ loan[7] or '🏪 Retail Sale' }}</strong>
-                            {% if loan[6] == 1 %}
-                                <span class="badge bg-success ms-1">Retail</span>
-                            {% else %}
-                                <span class="badge bg-primary ms-1">Consultation</span>
-                            {% endif %}
-                        </td>
-                        <td class="text-end">{{ "%.2f"|format(loan[1] / 100) }}</td>
-                        <td class="text-end">{{ "%.2f"|format(loan[2] / 100) }}</td>
-                        <td class="text-end text-danger fw-bold">{{ "%.2f"|format(balance / 100) }}</td>
-                        <td><small>{{ loan[3] or '—' }}</small></td>
-                        <td>
-                            {% if loan[4] %}
-                                <small class="{{ 'text-danger fw-bold' if is_overdue else 'text-muted' }}">
-                                    {{ loan[4] }}{{ ' (overdue)' if is_overdue else '' }}
-                                </small>
-                            {% else %}
-                                <small class="text-muted">No due date</small>
-                            {% endif %}
-                        </td>
-                        <td class="text-end">
-                            <a href="/cashier/loan/{{ loan[0] }}" class="btn btn-outline-info btn-sm">
-                                💳 View / Record Payment
-                            </a>
-                        </td>
-                    </tr>
-                    {% else %}
-                    <tr>
-                        <td colspan="7" class="text-center text-muted py-4">No active loans right now. 🎉</td>
-                    </tr>
-                    {% endfor %}
+                <tbody id="loansTableBody">
+                    <!-- Rendered by JS from /api/loans, same pattern as queue.html -->
                 </tbody>
             </table>
         </div>
     </div>
 </div>
 
+<script src="{{ url_for('static', filename='js/outbox.js') }}"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
+    loadLoans();
+    window.addEventListener('online', loadLoans);
+
     const searchInput = document.getElementById('loanSearchInput');
-    const noResultsMsg = document.getElementById('noResultsMsg');
-    const rows = document.querySelectorAll('table tbody tr[data-name]');
-
-    if (!searchInput) return;
-
     searchInput.addEventListener('input', function () {
-        const query = this.value.trim().toLowerCase();
-        let visibleCount = 0;
-
-        rows.forEach((row) => {
-            const matches = row.getAttribute('data-name').includes(query);
-            row.style.display = matches ? '' : 'none';
-            if (matches) visibleCount++;
-        });
-
-        noResultsMsg.style.display = (visibleCount === 0 && query.length > 0) ? 'block' : 'none';
+        applySearch(this.value.trim().toLowerCase());
     });
 });
+
+async function loadLoans() {
+    try {
+        const res = await fetch('/api/loans');
+        if (!res.ok) throw new Error('bad response');
+        const data = await res.json();
+        renderLoans(data);
+    } catch (err) {
+        document.getElementById('loanCountBadge').textContent = 'Unable to load';
+        document.getElementById('loansTableBody').innerHTML =
+            '<tr><td colspan="7" class="text-center text-muted py-4">Unable to load loans. Check your connection.</td></tr>';
+    }
+}
+
+function renderLoans(data) {
+    const loans = data.loans || [];
+    const tbody = document.getElementById('loansTableBody');
+    const countBadge = document.getElementById('loanCountBadge');
+
+    countBadge.textContent = `${loans.length} ${loans.length === 1 ? 'loan' : 'loans'} active`;
+
+    if (loans.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">No active loans right now. 🎉</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = loans.map(renderLoanRow).join('');
+    applySearch(document.getElementById('loanSearchInput').value.trim().toLowerCase());
+}
+
+function renderLoanRow(loan) {
+    const displayName = loan.patient_name || '🏪 Retail Sale';
+    const typeBadge = loan.is_retail
+        ? '<span class="badge bg-success ms-1">Retail</span>'
+        : '<span class="badge bg-primary ms-1">Consultation</span>';
+
+    const dueCell = loan.due_date
+        ? `<small class="${loan.is_overdue ? 'text-danger fw-bold' : 'text-muted'}">${cmEscapeHtml(loan.due_date)}${loan.is_overdue ? ' (overdue)' : ''}</small>`
+        : '<small class="text-muted">No due date</small>';
+
+    return `
+        <tr data-name="${cmEscapeHtml((loan.patient_name || '🏪 retail sale').toLowerCase())}">
+            <td><strong>${cmEscapeHtml(displayName)}</strong>${typeBadge}</td>
+            <td class="text-end">${(loan.total_fee / 100).toFixed(2)}</td>
+            <td class="text-end">${(loan.amount_paid / 100).toFixed(2)}</td>
+            <td class="text-end text-danger fw-bold">${(loan.balance / 100).toFixed(2)}</td>
+            <td><small>${cmEscapeHtml(loan.witness || '—')}</small></td>
+            <td>${dueCell}</td>
+            <td class="text-end">
+                <a href="/cashier/loan/${loan.id}" class="btn btn-outline-info btn-sm">💳 View / Record Payment</a>
+            </td>
+        </tr>
+    `;
+}
+
+function applySearch(query) {
+    const rows = document.querySelectorAll('#loansTableBody tr[data-name]');
+    const noResultsMsg = document.getElementById('noResultsMsg');
+    let visibleCount = 0;
+
+    rows.forEach((row) => {
+        const matches = row.getAttribute('data-name').includes(query);
+        row.style.display = matches ? '' : 'none';
+        if (matches) visibleCount++;
+    });
+
+    noResultsMsg.style.display = (visibleCount === 0 && query.length > 0) ? 'block' : 'none';
+}
 </script>
 {% endblock %}
