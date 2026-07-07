@@ -107,12 +107,6 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    // Full price list for the search box below, annotated with live
-    // stock status -- same shape/logic as visit.html's allItems, so
-    // both pages behave identically as the catalog grows.
-    // noStockConcept means this item has no inventory link at all
-    // (e.g. a service with no stock to track) and is therefore always
-    // selectable regardless of usableQty.
     const allItems = [
         {% for item in items %}
         {
@@ -127,159 +121,31 @@ document.addEventListener('DOMContentLoaded', function() {
         {% endfor %}
     ];
 
-    // Track items in the shopping cart
     const cart = [];
     let retailVisitId = null;
     let retailTotal = 0;
-    let selectedItem = null; // the currently picked-but-not-yet-added item
+    let selectedItem = null;
 
-    // Helper: Format money
     function formatMK(tambala) {
         return 'MK ' + (tambala / 100).toFixed(2);
     }
 
-    // --- PENDING RETAIL SALES (abandoned drafts: created via
-    // create_draft but never confirmed) ---
-    function loadPendingRetail() {
-        fetch('/retail/pending')
-            .then(res => res.json())
-            .then(data => {
-                const card = document.getElementById('pendingRetailCard');
-                const body = document.getElementById('pendingRetailBody');
-
-                if (!data.success || data.pending.length === 0) {
-                    card.style.display = 'none';
-                    return;
-                }
-
-                card.style.display = 'block';
-                body.innerHTML = '';
-
-                // Every draft here is guaranteed 'Ready for Cashier'
-                // with amount_paid = 0 -- /retail/pending excludes
-                // 'Loan Active' entirely. Once a retail sale takes its
-                // first payment it graduates to the /loans page
-                // instead, so there's nothing to brand or guard here.
-                data.pending.forEach(draft => {
-                    const tr = document.createElement('tr');
-
-                    tr.innerHTML = `
-                        <td><small>${new Date(draft.created_at).toLocaleString()}</small></td>
-                        <td class="text-end">${formatMK(draft.total_fee)}</td>
-                        <td class="text-end">
-                            <button class="btn btn-outline-primary btn-sm resume-draft-btn" data-id="${draft.visit_id}" data-total="${draft.total_fee}">
-                                ▶ Resume
-                            </button>
-                            <button class="btn btn-outline-danger btn-sm cancel-draft-btn ms-1" data-id="${draft.visit_id}">✕ Cancel</button>
-                        </td>
-                    `;
-                    body.appendChild(tr);
-                });
-
-                wireDraftButtons();
-            })
-            .catch(err => console.error('Could not load pending retail sales:', err));
+    function calculateLineTotal(item, qty) {
+        const packQuantity = (item.packQty && item.packQty > 0) ? item.packQty : 1;
+        const pricePerUnit = item.price / packQuantity;
+        return Math.round(pricePerUnit * qty);
     }
 
-    function wireDraftButtons() {
-        document.querySelectorAll('.resume-draft-btn').forEach(btn => {
-            btn.addEventListener('click', function() {
-                resumeDraft(
-                    this.getAttribute('data-id'),
-                    parseInt(this.getAttribute('data-total'))
-                );
-            });
+    function updateGrandTotalOnly() {
+        let grandTotal = 0;
+        cart.forEach((item) => {
+            grandTotal += calculateLineTotal(item, item.qty);
         });
-
-        document.querySelectorAll('.cancel-draft-btn').forEach(btn => {
-            btn.addEventListener('click', function() {
-                const visitId = this.getAttribute('data-id');
-                if (!confirm('Cancel this unpaid retail sale? This cannot be undone.')) return;
-
-                fetch('/retail/cancel/' + visitId, { method: 'POST' })
-                    .then(res => res.json())
-                    .then(data => {
-                        if (data.success) {
-                            loadPendingRetail();
-                        } else {
-                            alert('Error: ' + data.error);
-                        }
-                    })
-                    .catch(err => {
-                        console.error(err);
-                        alert('Network error. Please try again.');
-                    });
-            });
-        });
+        document.getElementById('grandTotal').textContent = formatMK(grandTotal);
+        retailTotal = grandTotal;
     }
 
-    // Resume a pending draft: reopen the same payment modal used for a
-    // brand-new sale, but skip create_draft (the visit already exists)
-    // and load its real invoice items from the server instead of the
-    // in-memory cart, since the page may have been reloaded since the
-    // draft was created. Every draft reaching here is guaranteed
-    // fully unpaid (status = 'Ready for Cashier', amount_paid = 0) --
-    // /retail/pending excludes anything that already has a payment.
-    function resumeDraft(visitId, totalFee) {
-        retailVisitId = visitId;
-        retailTotal = totalFee;
-
-        document.getElementById('modalPatientName').textContent = '🏪 Retail Sale';
-        document.getElementById('modalTotalFee').textContent = formatMK(totalFee);
-        document.getElementById('fullAmountDisplay').textContent = formatMK(totalFee);
-
-        // Reset form
-        document.getElementById('discountAmount').value = '';
-        document.getElementById('discountReason').value = '';
-        document.getElementById('loanAmount').value = '';
-        document.getElementById('loanWitness').value = '';
-        document.getElementById('loanDueDate').value = '';
-        document.getElementById('paymentReference').value = '';
-        document.getElementById('paymentChannel').value = 'Cash';
-        document.getElementById('medicalAidCompany').value = '';
-        document.getElementById('medicalAidFields').style.display = 'none';
-        document.getElementById('refFieldWrapper').style.display = 'none';
-        document.getElementById('roundingSelect').value = '0';
-        updateRoundedTotalDisplay();
-
-        document.getElementById('payFull').checked = true;
-        togglePaymentMode('full');
-
-        document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-muted">Loading items...</td></tr>';
-        paymentModal.show();
-
-        fetch('/cashier/view/' + visitId)
-            .then(res => res.json())
-            .then(data => {
-                if (data.error) {
-                    document.getElementById('invoiceItemsBody').innerHTML = `<tr><td colspan="5" class="text-center text-danger">${data.error}</td></tr>`;
-                    return;
-                }
-                let html = '';
-                data.items.forEach(item => {
-                    html += `
-                        <tr>
-                            <td><span class="badge bg-info text-dark">${item.type}</span></td>
-                            <td><strong>${item.name}</strong></td>
-                            <td class="text-end">${formatMK(item.unit_price)}</td>
-                            <td class="text-end">${item.qty}</td>
-                            <td class="text-end">${formatMK(item.total)}</td>
-                        </tr>
-                    `;
-                });
-                document.getElementById('invoiceItemsBody').innerHTML = html;
-                document.getElementById('invTotal').textContent = formatMK(retailTotal);
-            })
-            .catch(err => {
-                console.error(err);
-                document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-danger">Network error loading items.</td></tr>';
-            });
-    }
-
-    // (Pending retail sales are loaded at the end of this script, once
-    // paymentModal and the resume/cancel helpers above are all wired up.)
-
-    // Render the cart table
+    // Render the cart table with editable quantities (Mirrors visit.html behavior)
     function renderCart() {
         const tbody = document.getElementById('cartBody');
         const emptyRow = document.getElementById('emptyCartRow');
@@ -299,17 +165,21 @@ document.addEventListener('DOMContentLoaded', function() {
         let grandTotal = 0;
 
         cart.forEach((item, index) => {
-            const packQty = item.packQty > 0 ? item.packQty : 1;
-            const unitPrice = item.price / packQty;
-            const lineTotal = Math.round(unitPrice * item.qty);
+            const packQuantity = item.packQty > 0 ? item.packQty : 1;
+            const unitPrice = item.price / packQuantity;
+            const lineTotal = calculateLineTotal(item, item.qty);
             grandTotal += lineTotal;
+
+            const maxAttr = item.noStockConcept ? '' : `max="${item.usableQty}"`;
 
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td><strong>${item.name}</strong> <small class="text-muted">(${item.type})</small></td>
                 <td class="text-end">${formatMK(unitPrice)}</td>
-                <td class="text-end">${item.qty}</td>
-                <td class="text-end">${formatMK(lineTotal)}</td>
+                <td>
+                    <input type="number" class="form-control form-control-sm cart-qty-input" value="${item.qty}" data-index="${index}" min="1" ${maxAttr} style="width: 90px;">
+                </td>
+                <td class="text-end line-total">${formatMK(lineTotal)}</td>
                 <td class="text-end">
                     <button class="btn btn-outline-danger btn-sm remove-item-btn" data-index="${index}">✕</button>
                 </td>
@@ -320,9 +190,41 @@ document.addEventListener('DOMContentLoaded', function() {
         grandTotalEl.textContent = formatMK(grandTotal);
         retailTotal = grandTotal;
         proceedBtn.disabled = false;
+
+        // Wire live input alterations 
+        tbody.querySelectorAll('.cart-qty-input').forEach(input => {
+            input.addEventListener('input', function() {
+                const idx = parseInt(this.dataset.index, 10);
+                const item = cart[idx];
+                if (!item) return;
+
+                let raw = parseInt(this.value, 10);
+                const row = this.closest('tr');
+
+                if (!isNaN(raw) && raw >= 1) {
+                    if (!item.noStockConcept && raw > item.usableQty) {
+                        raw = item.usableQty;
+                        this.value = raw;
+                    }
+                    item.qty = raw;
+                    const lineTotal = calculateLineTotal(item, item.qty);
+                    row.querySelector('.line-total').textContent = formatMK(lineTotal);
+                    updateGrandTotalOnly();
+                }
+            });
+
+            input.addEventListener('blur', function() {
+                let raw = parseInt(this.value, 10);
+                if (isNaN(raw) || raw < 1) {
+                    this.value = 1;
+                    cart[this.dataset.index].qty = 1;
+                }
+                renderCart();
+            });
+        });
     }
 
-    // --- Item search box (replaces the old <select> dropdown) ---
+    // --- Item search box logic ---
     const searchInput = document.getElementById('itemSearchInput');
     const searchResults = document.getElementById('searchResults');
     const qtyInput = document.getElementById('qtyInput');
@@ -330,8 +232,6 @@ document.addEventListener('DOMContentLoaded', function() {
     const selectedItemLabel = document.getElementById('selectedItemLabel');
 
     function isSelectable(item) {
-        // Blocked only when there IS a stock concept and NOTHING usable
-        // remains -- same rule as visit.html.
         if (item.noStockConcept) return true;
         return item.usableQty > 0;
     }
@@ -365,7 +265,6 @@ document.addEventListener('DOMContentLoaded', function() {
         if (query.length === 0) { closeSearchResults(); return; }
 
         const matches = allItems.filter(item => item.name.toLowerCase().includes(query));
-
         searchResults.innerHTML = '';
 
         if (matches.length === 0) {
@@ -394,7 +293,6 @@ document.addEventListener('DOMContentLoaded', function() {
             if (selectable) {
                 div.addEventListener('click', () => pickItem(item));
             }
-
             searchResults.appendChild(div);
         });
 
@@ -407,7 +305,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Add the currently-selected item to cart at the chosen quantity
     document.getElementById('addToCartBtn').addEventListener('click', function() {
         if (!selectedItem) {
             alert('Please search for and select an item first.');
@@ -431,6 +328,8 @@ document.addEventListener('DOMContentLoaded', function() {
             type: selectedItem.type,
             price: selectedItem.price,
             packQty: selectedItem.packQty,
+            usableQty: selectedItem.usableQty,
+            noStockConcept: selectedItem.noStockConcept,
             qty: qty
         });
 
@@ -441,7 +340,6 @@ document.addEventListener('DOMContentLoaded', function() {
         searchInput.focus();
     });
 
-    // Remove item from cart
     document.getElementById('cartBody').addEventListener('click', function(e) {
         if (e.target.classList.contains('remove-item-btn')) {
             const index = parseInt(e.target.dataset.index);
@@ -450,10 +348,9 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // --- Unified Payment Modal Logic for Retail ---
+    // --- Unified Payment Modal Logic ---
     const paymentModal = new bootstrap.Modal(document.getElementById('paymentModal'));
 
-    // Populate Staff Witness Dropdown
     fetch('/api/staff/list')
         .then(res => res.json())
         .then(data => {
@@ -468,7 +365,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
     document.getElementById('proceedToPaymentBtn').addEventListener('click', function() {
-        // Create a temporary retail visit to get an ID
         fetch('/retail/create_draft', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -479,12 +375,10 @@ document.addEventListener('DOMContentLoaded', function() {
             if (data.success) {
                 retailVisitId = data.visit_id;
                 
-                // Populate Modal
                 document.getElementById('modalPatientName').textContent = '🏪 Retail Sale';
                 document.getElementById('modalTotalFee').textContent = formatMK(retailTotal);
                 document.getElementById('fullAmountDisplay').textContent = formatMK(retailTotal);
                 
-                // Reset form
                 document.getElementById('discountAmount').value = '';
                 document.getElementById('discountReason').value = '';
                 document.getElementById('loanAmount').value = '';
@@ -498,20 +392,17 @@ document.addEventListener('DOMContentLoaded', function() {
                 document.getElementById('roundingSelect').value = '0';
                 updateRoundedTotalDisplay();
 
-                // Reset Payment Mode
                 document.getElementById('payFull').checked = true;
                 togglePaymentMode('full');
 
-                // Load Invoice Items
                 document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-muted">Loading items...</td></tr>';
                 paymentModal.show();
 
-                // Build invoice HTML from cart
                 let html = '';
                 cart.forEach(item => {
-                    const packQty = item.packQty > 0 ? item.packQty : 1;
-                    const unitPrice = item.price / packQty;
-                    const lineTotal = Math.round(unitPrice * item.qty);
+                    const packQuantity = item.packQty > 0 ? item.packQty : 1;
+                    const unitPrice = item.price / packQuantity;
+                    const lineTotal = calculateLineTotal(item, item.qty);
                     html += `
                         <tr>
                             <td><span class="badge bg-info text-dark">${item.type}</span></td>
@@ -534,8 +425,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
-    // Rounds retailTotal (the raw sale total, in tambala) to the nearest
-    // selected MK value. "0" means no rounding.
     function getRoundedBaseTotal() {
         const roundTo = parseInt(document.getElementById('roundingSelect').value, 10) || 0;
         if (roundTo <= 0) return retailTotal;
@@ -565,7 +454,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Discount amount always live-updates the full-payment display
     document.getElementById('discountAmount').addEventListener('input', function() {
         document.getElementById('fullAmountDisplay').textContent = 'MK ' + (getFinalTotal() / 100).toFixed(2);
         updateLoanRemaining();
@@ -583,7 +471,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
-    // Payment Channel Logic
     document.getElementById('paymentChannel').addEventListener('change', function() {
         const val = this.value;
         const refLabel = document.getElementById('refLabel');
@@ -617,13 +504,11 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // 1. Calculate the final total: round first, then apply discount
     function getFinalTotal() {
         const discountAmt = parseFloat(document.getElementById('discountAmount').value) * 100 || 0;
         return Math.max(0, getRoundedBaseTotal() - discountAmt);
     }
 
-    // 2. CONFIRM PAYMENT HANDLER (Re-written to avoid duplicate events)
     document.getElementById('confirmPaymentBtn').addEventListener('click', function() {
         const isFull = document.querySelector('input[name="payMode"]:checked').value === 'full';
         const finalTotal = getFinalTotal();
@@ -714,13 +599,7 @@ document.addEventListener('DOMContentLoaded', function() {
         btn.textContent = '✅ Confirm & Complete';
     });
 
-    // --- Send Back (retail context) ---
-    // Retail already treats an unpaid draft as disposable/redoable
-    // (see /retail/cancel + Pending Retail Sales) -- "Send Back" here
-    // is that same cancel, but instead of losing the items, they're
-    // reloaded straight into the live, editable cart so the operator
-    // can add/remove and re-submit instead of re-searching everything
-    // from scratch.
+    // --- Send Back (Fixes precision issues by restoring from metadata source) ---
     document.getElementById('sendBackBtn').addEventListener('click', function() {
         if (!retailVisitId) {
             alert('Error: Visit ID is missing. Please add items and try again.');
@@ -728,7 +607,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         const reason = prompt('Send this sale back to the cart for editing. What needs fixing? (optional)');
-        if (reason === null) return; // cancelled the prompt
+        if (reason === null) return;
 
         if (!confirm('Send this sale back to the cart? It will not be charged now -- you can edit the items and finalize it again afterwards.')) {
             return;
@@ -748,19 +627,19 @@ document.addEventListener('DOMContentLoaded', function() {
             if (data.success) {
                 document.getElementById('paymentModal').querySelector('.btn-close').click();
 
-                // Reload the returned items straight into the live cart.
-                // price_per_unit is exact (stored at add-time), so using
-                // packQty = 1 here reproduces the same per-unit price
-                // and line total without needing to re-look-up the
-                // original pack price/pack size.
                 cart.length = 0;
                 data.items.forEach(item => {
+                    // Match item back to master catalog list to load original Pack Price boundaries safely
+                    const catalogMatch = allItems.find(i => parseInt(i.id, 10) === parseInt(item.price_list_id, 10));
+                    
                     cart.push({
                         price_list_id: item.price_list_id,
                         name: item.name,
                         type: item.type,
-                        price: Math.round(item.price_per_unit),
-                        packQty: 1,
+                        price: catalogMatch ? catalogMatch.price : Math.round(item.price_per_unit),
+                        packQty: catalogMatch ? catalogMatch.packQty : 1,
+                        usableQty: catalogMatch ? catalogMatch.usableQty : 999,
+                        noStockConcept: catalogMatch ? catalogMatch.noStockConcept : true,
                         qty: item.qty
                     });
                 });
@@ -781,8 +660,128 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
-    // Load any abandoned drafts now that the modal and all its helper
-    // functions above are fully wired up.
+    function loadPendingRetail() {
+        fetch('/retail/pending')
+            .then(res => res.json())
+            .then(data => {
+                const card = document.getElementById('pendingRetailCard');
+                const body = document.getElementById('pendingRetailBody');
+
+                if (!data.success || data.pending.length === 0) {
+                    card.style.display = 'none';
+                    return;
+                }
+
+                card.style.display = 'block';
+                body.innerHTML = '';
+
+                data.pending.forEach(draft => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td><small>${new Date(draft.created_at).toLocaleString()}</small></td>
+                        <td class="text-end">${formatMK(draft.total_fee)}</td>
+                        <td class="text-end">
+                            <button class="btn btn-outline-primary btn-sm resume-draft-btn" data-id="${draft.visit_id}" data-total="${draft.total_fee}">
+                                ▶ Resume
+                            </button>
+                            <button class="btn btn-outline-danger btn-sm cancel-draft-btn ms-1" data-id="${draft.visit_id}">✕ Cancel</button>
+                        </td>
+                    `;
+                    body.appendChild(tr);
+                });
+
+                wireDraftButtons();
+            })
+            .catch(err => console.error('Could not load pending retail sales:', err));
+    }
+
+    function wireDraftButtons() {
+        document.querySelectorAll('.resume-draft-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                resumeDraft(
+                    this.getAttribute('data-id'),
+                    parseInt(this.getAttribute('data-total'))
+                );
+            });
+        });
+
+        document.querySelectorAll('.cancel-draft-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const visitId = this.getAttribute('data-id');
+                if (!confirm('Cancel this unpaid retail sale? This cannot be undone.')) return;
+
+                fetch('/retail/cancel/' + visitId, { method: 'POST' })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.success) {
+                            loadPendingRetail();
+                        } else {
+                            alert('Error: ' + data.error);
+                        }
+                    })
+                    .catch(err => {
+                        console.error(err);
+                        alert('Network error. Please try again.');
+                    });
+            });
+        });
+    }
+
+    function resumeDraft(visitId, totalFee) {
+        retailVisitId = visitId;
+        retailTotal = totalFee;
+
+        document.getElementById('modalPatientName').textContent = '🏪 Retail Sale';
+        document.getElementById('modalTotalFee').textContent = formatMK(totalFee);
+        document.getElementById('fullAmountDisplay').textContent = formatMK(totalFee);
+
+        document.getElementById('discountAmount').value = '';
+        document.getElementById('discountReason').value = '';
+        document.getElementById('loanAmount').value = '';
+        document.getElementById('loanWitness').value = '';
+        document.getElementById('loanDueDate').value = '';
+        document.getElementById('paymentReference').value = '';
+        document.getElementById('paymentChannel').value = 'Cash';
+        document.getElementById('medicalAidCompany').value = '';
+        document.getElementById('medicalAidFields').style.display = 'none';
+        document.getElementById('refFieldWrapper').style.display = 'none';
+        document.getElementById('roundingSelect').value = '0';
+        updateRoundedTotalDisplay();
+
+        document.getElementById('payFull').checked = true;
+        togglePaymentMode('full');
+
+        document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-muted">Loading items...</td></tr>';
+        paymentModal.show();
+
+        fetch('/cashier/view/' + visitId)
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    document.getElementById('invoiceItemsBody').innerHTML = `<tr><td colspan="5" class="text-center text-danger">${data.error}</td></tr>`;
+                    return;
+                }
+                let html = '';
+                data.items.forEach(item => {
+                    html += `
+                        <tr>
+                            <td><span class="badge bg-info text-dark">${item.type}</span></td>
+                            <td><strong>${item.name}</strong></td>
+                            <td class="text-end">${formatMK(item.unit_price)}</td>
+                            <td class="text-end">${item.qty}</td>
+                            <td class="text-end">${formatMK(item.total)}</td>
+                        </tr>
+                    `;
+                });
+                document.getElementById('invoiceItemsBody').innerHTML = html;
+                document.getElementById('invTotal').textContent = formatMK(retailTotal);
+            })
+            .catch(err => {
+                console.error(err);
+                document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-danger">Network error loading items.</td></tr>';
+            });
+    }
+
     loadPendingRetail();
 });
 </script>
