@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Appointments — ClinicManager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#0A3530">
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/app.css">
+    <style>
+        .bg-purple {
+            background-color: #6f42c1 !important;
+            color: white !important;
+        }
+        .appt-actions {
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <div class="container">
+            <div class="app-container">
+                <div id="cmFlashContainer"></div>
+                
+                <div class="row">
+                    <div class="col-12">
+                        <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
+                            <h3 class="mb-0">📅 Appointments</h3>
+                            <a href="/static/pages/schedule_appointment.html" class="btn btn-success btn-sm">➕ Schedule New</a>
+                        </div>
+
+                        <div class="mb-3">
+                            <input type="text" id="apptSearchInput" class="form-control" placeholder="🔍 Search by patient name..." autocomplete="off">
+                        </div>
+
+                        <div class="table-responsive">
+                            <table class="table table-striped table-hover align-middle">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th>Patient</th>
+                                        <th>Date & Time</th>
+                                        <th>Reason</th>
+                                        <th>Status</th>
+                                        <th class="text-end">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="appointmentsTableBody">
+                                    <tr id="emptyRow">
+                                        <td colspan="5" class="text-center text-muted py-4">Loading appointments...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/static/js/shell.js"></script>
+    <script>
+    document.addEventListener('DOMContentLoaded', async function () {
+        const { authenticated, session } = await CMShell.init({ active: 'appointments' });
+        if (!authenticated) return;
+
+        loadAppointments();
+        window.addEventListener('online', loadAppointments);
+
+        // Search functionality
+        const searchInput = document.getElementById('apptSearchInput');
+        searchInput.addEventListener('input', function() {
+            const query = this.value.trim().toLowerCase();
+            applySearch(query);
+        });
+    });
+
+    async function loadAppointments() {
+        try {
+            const res = await fetch('/api/appointments');
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+            renderAppointments(data);
+        } catch (err) {
+            document.getElementById('appointmentsTableBody').innerHTML =
+                '<tr><td colspan="5" class="text-center text-muted py-4">Unable to load appointments. Check your connection.</td></tr>';
+        }
+    }
+
+    function renderAppointments(data) {
+        const appointments = data.appointments || [];
+        const tbody = document.getElementById('appointmentsTableBody');
+
+        if (appointments.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">No scheduled appointments.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = appointments.map(renderAppointmentRow).join('');
+        attachAppointmentHandlers();
+        applySearch(document.getElementById('apptSearchInput').value.trim().toLowerCase());
+    }
+
+    function renderAppointmentRow(appt) {
+        const statusBadge = appt.status === 'Pending'
+            ? '<span class="badge bg-purple">Pending</span>'
+            : appt.status === 'Scheduled'
+                ? '<span class="badge bg-success">Scheduled</span>'
+                : appt.status === 'Cancelled'
+                    ? '<span class="badge bg-danger">Cancelled</span>'
+                    : appt.status === 'Missed'
+                        ? '<span class="badge bg-secondary">Missed</span>'
+                        : `<span class="badge bg-info text-dark">${appt.status}</span>`;
+
+        const showConfirm = appt.status === 'Pending';
+        const showCheckIn = appt.status === 'Scheduled';
+        const showMissed = appt.status === 'Pending' || appt.status === 'Scheduled';
+
+        // Get current role from CMShell session
+        const role = window.__cmSession?.role?.toLowerCase() || '';
+
+        let actions = '';
+
+        // Doctor: Confirm (only when status is Pending)
+        if (showConfirm && role === 'doctor') {
+            actions += `<button class="btn btn-success btn-sm confirm-btn" data-id="${appt.id}">✅ Confirm</button> `;
+        }
+
+        // Check In (only when status is Scheduled)
+        if (showCheckIn) {
+            actions += `<button class="btn btn-primary btn-sm checkin-btn" data-id="${appt.id}">🚪 Check In</button> `;
+        }
+
+        // Common actions
+        actions += `
+            <button class="btn btn-outline-warning btn-sm reschedule-btn" data-id="${appt.id}" data-date="${appt.date}">📅 Resched</button>
+            <button class="btn btn-outline-danger btn-sm cancel-btn" data-id="${appt.id}">❌ Cancel</button>
+        `;
+
+        if (showMissed) {
+            actions += `<button class="btn btn-outline-secondary btn-sm miss-btn" data-id="${appt.id}">⏳ Missed</button>`;
+        }
+
+        return `
+            <tr data-name="${cmEscapeHtml(appt.patient_name.toLowerCase())}">
+                <td><strong>${cmEscapeHtml(appt.patient_name)}</strong><br><small class="text-muted">${cmEscapeHtml(appt.phone || '')}</small></td>
+                <td>${appt.date ? appt.date.slice(0, 16) : ''}</td>
+                <td><small>${cmEscapeHtml(appt.reason || '')}</small></td>
+                <td>${statusBadge}</td>
+                <td class="text-end appt-actions">${actions}</td>
+            </tr>
+        `;
+    }
+
+    function applySearch(query) {
+        const rows = document.querySelectorAll('#appointmentsTableBody tr[data-name]');
+        let visibleCount = 0;
+
+        rows.forEach((row) => {
+            const matches = row.getAttribute('data-name').includes(query);
+            row.style.display = matches ? '' : 'none';
+            if (matches) visibleCount++;
+        });
+    }
+
+    function attachAppointmentHandlers() {
+        // Confirm
+        document.querySelectorAll('.confirm-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                if (confirm('Confirm this appointment?')) {
+                    postAction(this.dataset.id, 'confirm').then(() => location.reload());
+                }
+            });
+        });
+
+        // Check In
+        document.querySelectorAll('.checkin-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                if (confirm('Check in this patient? They will move to the Active Queue.')) {
+                    postAction(this.dataset.id, 'check_in').then(() => location.reload());
+                }
+            });
+        });
+
+        // Missed
+        document.querySelectorAll('.miss-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                if (confirm('Mark this appointment as Missed?')) {
+                    postAction(this.dataset.id, 'missed').then(() => location.reload());
+                }
+            });
+        });
+
+        // Cancel
+        document.querySelectorAll('.cancel-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const reason = prompt('Reason for cancellation:');
+                if (reason !== null) {
+                    postAction(this.dataset.id, 'cancel', { reason: reason }).then(() => location.reload());
+                }
+            });
+        });
+
+        // Reschedule
+        document.querySelectorAll('.reschedule-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const newDate = prompt('Enter new date (YYYY-MM-DD HH:MM):', this.dataset.date);
+                if (newDate) {
+                    postAction(this.dataset.id, 'reschedule', { new_date: newDate }).then(() => location.reload());
+                }
+            });
+        });
+    }
+
+    function postAction(id, action, extra = {}) {
+        return fetch('/api/appointments/update/' + id, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: action, ...extra })
+        }).then(res => res.json());
+    }
+
+    // Helper for escaping HTML (from outbox.js)
+    function cmEscapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str || '';
+        return div.innerHTML;
+    }
+    </script>
+</body>
+</html>

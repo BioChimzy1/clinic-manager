@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard — ClinicManager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#0A3530">
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/app.css">
+    <style>
+        .dashboard-stat-card {
+            transition: transform 0.12s ease, box-shadow 0.12s ease;
+            height: 100%;
+            background: var(--cream) !important;
+            border: 1px solid rgba(15,76,70,0.08);
+            border-radius: 14px;
+            box-shadow: 0 2px 12px rgba(15,76,70,0.06);
+        }
+        .dashboard-stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 .5rem 1rem rgba(0,0,0,.1) !important;
+        }
+        .card.h-100 { height: 100% !important; }
+        
+        /* Stat numbers */
+        .stat-number {
+            font-size: 2.2rem;
+            font-weight: 700;
+            line-height: 1.1;
+        }
+        .stat-label {
+            font-size: 0.85rem;
+            color: var(--charcoal-soft);
+        }
+        
+        /* Border colors */
+        .border-primary { border-color: var(--terracotta) !important; }
+        .border-success { border-color: var(--teal) !important; }
+        .border-warning { border-color: #e8b84b !important; }
+        .border-info { border-color: #4a9e9e !important; }
+        .border-danger { border-color: #c85a5a !important; }
+        .border-secondary { border-color: var(--charcoal-soft) !important; }
+        .border-dark { border-color: var(--teal-deep) !important; }
+        
+        .text-warning { color: #e8b84b !important; }
+        .text-info { color: #4a9e9e !important; }
+        
+        .badge.bg-success { background-color: var(--teal) !important; }
+        .badge.bg-danger { background-color: #c85a5a !important; }
+        .badge.bg-warning { background-color: #e8b84b !important; color: var(--charcoal) !important; }
+        .badge.bg-info { background-color: #4a9e9e !important; color: white !important; }
+    </style>
+</head>
+<body>
+    <main>
+        <div class="container">
+            <div class="app-container">
+                <!-- Welcome Banner -->
+                <div class="row g-4 mb-4">
+                    <div class="col-12">
+                        <div class="alert alert-success d-flex justify-content-between align-items-center mb-0">
+                            <div>
+                                <h4 class="mb-0" id="welcomeMessage">Welcome back!</h4>
+                                <small class="text-muted">You are logged in to ClinicManager.</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Stale data warning (hidden by default) -->
+                <div class="row g-4 mb-3">
+                    <div class="col-12">
+                        <div id="dashboardStaleBanner" class="alert alert-warning py-2 px-3 mb-0" style="display: none;"></div>
+                    </div>
+                </div>
+
+                <!-- Stats Grid -->
+                <div class="row g-4" id="dashboardStatsGrid">
+                    <!-- 1. ACTIVE QUEUE -->
+                    <div class="col-md-6 col-lg-4" data-role-allow="admin,doctor,pharmacist,cashier,receptionist,nurse,guard">
+                        <a href="/queue" class="card h-100 shadow-sm p-3 border-start border-4 border-primary text-decoration-none text-dark dashboard-stat-card">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <h5 class="mb-0">📋 Active Queue</h5>
+                                <span class="text-primary fw-bold">Go →</span>
+                            </div>
+                            <div class="row text-center g-2">
+                                <div class="col-4">
+                                    <div class="stat-number text-warning" id="statWaiting">—</div>
+                                    <div class="stat-label">Waiting</div>
+                                </div>
+                                <div class="col-4">
+                                    <div class="stat-number text-info" id="statPending">—</div>
+                                    <div class="stat-label">Pending</div>
+                                </div>
+                                <div class="col-4">
+                                    <div class="stat-number text-secondary" id="statSeenToday">—</div>
+                                    <div class="stat-label">Seen Today</div>
+                                </div>
+                            </div>
+                            <div class="text-center mt-2"><span class="badge bg-secondary" id="statTotalQueue">Loading...</span></div>
+                        </a>
+                    </div>
+
+                    <!-- 2. REGISTER PATIENT -->
+                    <div class="col-md-6 col-lg-4" data-role-allow="admin,doctor,receptionist">
+                        <div class="card h-100 shadow-sm text-center p-3 border-start border-4 border-success">
+                            <h2 class="display-4 text-success mb-2">➕</h2>
+                            <h5>Register Patient</h5>
+                            <p class="text-muted small">Add a new patient to the system.</p>
+                            <a href="/register" class="btn btn-success btn-sm stretched-link">Register</a>
+                        </div>
+                    </div>
+
+                    <!-- 3. APPOINTMENTS -->
+                    <div class="col-md-6 col-lg-4" data-role-allow="admin,doctor,pharmacist,cashier,receptionist,nurse">
+                        <a href="/appointments" class="card h-100 shadow-sm p-3 border-start border-4 border-secondary text-decoration-none text-dark dashboard-stat-card">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <h5 class="mb-0">📅 Appointments</h5>
+                                <span class="text-secondary fw-bold">Go →</span>
+                            </div>
+                            <div class="text-center py-2">
+                                <div class="stat-number text-secondary" id="statAppointments">—</div>
+                                <div class="stat-label">Pending / Scheduled</div>
+                            </div>
+                        </a>
+                    </div>
+
+                    <!-- 4. INVENTORY -->
+                    <div class="col-md-6 col-lg-4" data-role-allow="admin,doctor,pharmacist,cashier,nurse">
+                        <a href="/inventory" class="card h-100 shadow-sm p-3 border-start border-4 border-warning text-decoration-none text-dark dashboard-stat-card">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <h5 class="mb-0">📦 Inventory</h5>
+                                <span class="text-warning fw-bold">Go →</span>
+                            </div>
+                            <div class="row text-center g-2">
+                                <div class="col-4">
+                                    <div class="stat-number text-dark" id="statTotalItems">—</div>
+                                    <div class="stat-label">Items</div>
+                                </div>
+                                <div class="col-4">
+                                    <div class="stat-number text-danger" id="statLowStock">—</div>
+                                    <div class="stat-label">Low Stock</div>
+                                </div>
+                                <div class="col-4">
+                                    <div class="stat-number text-danger" id="statExpiringSoon">—</div>
+                                    <div class="stat-label">Expiring 14d</div>
+                                </div>
+                            </div>
+                        </a>
+                    </div>
+
+                    <!-- 5. PRICE LIST -->
+                    <div class="col-md-6 col-lg-4" data-role-allow="admin,doctor,pharmacist,cashier">
+                        <a href="/price_list" class="card h-100 shadow-sm p-3 border-start border-4 border-info text-decoration-none text-dark dashboard-stat-card">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <h5 class="mb-0">💰 Price List</h5>
+                                <span class="text-info fw-bold">Go →</span>
+                            </div>
+                            <div class="text-center py-2">
+                                <div class="stat-number text-info" id="statPricedItems">—</div>
+                                <div class="stat-label">Priced Items</div>
+                            </div>
+                        </a>
+                    </div>
+
+                    <!-- 6. CASHIER -->
+                    <div class="col-md-6 col-lg-4" data-role-allow="admin,cashier,doctor">
+                        <a href="/cashier" class="card h-100 shadow-sm p-3 border-start border-4 border-danger text-decoration-none text-dark dashboard-stat-card">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <h5 class="mb-0">💰 Cashier</h5>
+                                <span class="text-danger fw-bold">Go →</span>
+                            </div>
+                            <div class="text-center py-2">
+                                <div class="stat-number text-danger" id="statCashierCount">—</div>
+                                <div class="stat-label">Awaiting Payment</div>
+                            </div>
+                        </a>
+                    </div>
+
+                    <!-- 6b. LOANS -->
+                    <div class="col-md-6 col-lg-4" data-role-allow="admin,cashier,doctor,receptionist">
+                        <a href="/loans" class="card h-100 shadow-sm p-3 border-start border-4 border-info text-decoration-none text-dark dashboard-stat-card">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <h5 class="mb-0">💳 Loans</h5>
+                                <span class="text-info fw-bold">Go →</span>
+                            </div>
+                            <div class="text-center py-2">
+                                <div class="stat-number text-info" id="statLoansCount">—</div>
+                                <div class="stat-label">Active Loans</div>
+                            </div>
+                        </a>
+                    </div>
+
+                    <!-- 7. RETAIL -->
+                    <div class="col-md-6 col-lg-4" data-role-allow="admin,pharmacist,cashier,doctor">
+                        <a href="/retail" class="card h-100 shadow-sm p-3 border-start border-4 border-success text-decoration-none text-dark dashboard-stat-card">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <h5 class="mb-0">🏪 Retail Sales</h5>
+                                <span class="text-success fw-bold">Go →</span>
+                            </div>
+                            <div class="text-center py-2">
+                                <div class="stat-number text-success fw-bold">💊</div>
+                                <div class="stat-label">Over-the-Counter</div>
+                            </div>
+                        </a>
+                    </div>
+
+                    <!-- 8. FINANCE -->
+                    <div class="col-md-6 col-lg-4" data-role-allow="admin,doctor,cashier">
+                        <a href="/finance" class="card h-100 shadow-sm p-3 border-start border-4 border-dark text-decoration-none text-dark dashboard-stat-card">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <h5 class="mb-0">📊 Today's Cash</h5>
+                                <span class="text-dark fw-bold">Go →</span>
+                            </div>
+                            <div class="text-center py-2">
+                                <div class="stat-number text-success" id="statTodayCash">MK 0.00</div>
+                                <div class="stat-label">Collected Today</div>
+                            </div>
+                        </a>
+                    </div>
+
+                    <!-- 9. CREATE NEW CLINIC (Admin Only) -->
+                    <div class="col-md-6 col-lg-4" id="createClinicCard" style="display: none;">
+                        <div class="card h-100 shadow-sm p-3 border-start border-4 border-secondary">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <h5 class="mb-0">➕ New Clinic</h5>
+                            </div>
+                            <p class="text-muted small">Start a fresh clinic with its own patients, inventory, and finance.</p>
+                            <form id="createClinicForm">
+                                <div class="mb-2">
+                                    <input type="text" name="clinic_name" class="form-control form-control-sm" placeholder="Clinic name" required>
+                                </div>
+                                <div class="mb-2">
+                                    <input type="text" name="phone" class="form-control form-control-sm" placeholder="Phone (optional)">
+                                </div>
+                                <button type="submit" id="createClinicBtn" class="btn btn-secondary btn-sm w-100">➕ Create Clinic</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/static/js/shell.js"></script>
+    <script src="/static/js/outbox.js"></script>
+    <script>
+    let isOfflineMode = false;
+    let sessionData = null;
+
+    document.addEventListener('DOMContentLoaded', async function () {
+        const { authenticated, session } = await CMShell.init({ active: 'dashboard' });
+        if (!authenticated) return;
+        sessionData = session;
+
+        // Set Welcome message
+        const role = session.role || 'Staff';
+        document.getElementById('welcomeMessage').textContent = `Welcome back, ${role}!`;
+
+        // Show Create Clinic card if Admin
+        if (role.toLowerCase() === 'admin') {
+            document.getElementById('createClinicCard').style.display = 'block';
+        }
+
+        loadDashboard();
+        window.addEventListener('online', loadDashboard);
+
+        // Handle Create Clinic Form
+        document.getElementById('createClinicForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const btn = document.getElementById('createClinicBtn');
+            const formData = new FormData(this);
+
+            btn.disabled = true;
+            btn.textContent = 'Creating...';
+
+            try {
+                const res = await fetch('/api/clinics/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        clinic_name: formData.get('clinic_name'),
+                        phone: formData.get('phone')
+                    })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    // Force a reload to see the new clinic in the nav switcher
+                    window.location.reload();
+                } else {
+                    alert('Error: ' + (data.error || 'Could not create clinic'));
+                    btn.disabled = false;
+                    btn.textContent = '➕ Create Clinic';
+                }
+            } catch (err) {
+                alert('Network error. Please try again.');
+                btn.disabled = false;
+                btn.textContent = '➕ Create Clinic';
+            }
+        });
+    });
+
+    async function loadDashboard() {
+        try {
+            const res = await fetch('/api/dashboard');
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+            await cmSaveDashboardSnapshot(data);
+            renderDashboard(data, false);
+        } catch (err) {
+            const cached = await cmGetDashboardSnapshot();
+            if (cached) {
+                renderDashboard(cached, true);
+            }
+        }
+    }
+
+    function renderDashboard(data, isStale) {
+        isOfflineMode = isStale;
+        const banner = document.getElementById('dashboardStaleBanner');
+
+        if (isStale) {
+            const when = new Date(data.fetched_at).toLocaleString();
+            banner.textContent = `⏳ Figures as of ${when} — go online for current numbers.`;
+            banner.style.display = 'block';
+        } else {
+            banner.style.display = 'none';
+        }
+
+        document.getElementById('statWaiting').textContent = data.waiting_count ?? '—';
+        document.getElementById('statPending').textContent = data.pending_count ?? '—';
+        document.getElementById('statSeenToday').textContent = data.seen_today_count ?? '—';
+        document.getElementById('statTotalQueue').textContent = `${data.total_queue_count ?? 0} total`;
+        document.getElementById('statAppointments').textContent = data.appointments_count ?? '—';
+        document.getElementById('statTotalItems').textContent = data.total_items_count ?? '—';
+        document.getElementById('statLowStock').textContent = data.low_stock_count ?? '—';
+        document.getElementById('statExpiringSoon').textContent = data.expiring_soon_count ?? '—';
+        document.getElementById('statPricedItems').textContent = data.priced_items_count ?? '—';
+        document.getElementById('statCashierCount').textContent = data.cashier_count ?? '—';
+        document.getElementById('statLoansCount').textContent = data.loans_count ?? '—';
+        document.getElementById('statTodayCash').textContent = `MK ${(data.today_cash_collected / 100).toFixed(2)}`;
+
+        // Lock the "Create Clinic" button if offline
+        const createClinicBtn = document.getElementById('createClinicBtn');
+        if (createClinicBtn) {
+            createClinicBtn.disabled = isStale;
+            createClinicBtn.title = isStale ? 'Connect to the internet to create a new clinic' : '';
+        }
+    }
+    </script>
+</body>
+</html>

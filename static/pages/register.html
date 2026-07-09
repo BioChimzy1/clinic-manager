@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Register Patient — ClinicManager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#0A3530">
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/app.css">
+    <style>
+        .register-container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <div class="container">
+            <div class="app-container">
+                <div id="cmFlashContainer"></div>
+                
+                <div class="row">
+                    <div class="col-12">
+                        <h3 class="mb-4 text-dark border-bottom pb-2">Register New Patient</h3>
+
+                        <div id="offlineNotice" class="alert alert-warning py-2 px-3 mb-3" style="display: none;">
+                            📡 You're offline — this patient will be saved on your device now and sent to the server automatically once you're back online.
+                        </div>
+
+                        <form id="registerForm" class="register-container">
+                            <div class="mb-3">
+                                <label class="form-label fw-bold">Full Name</label>
+                                <input type="text" name="name" class="form-control" placeholder="e.g. Bio Chimzy" required>
+                            </div>
+                            
+                            <div class="row mb-3">
+                                <div class="col-12">
+                                    <label class="form-label fw-bold">Registration Type</label>
+                                    <select name="appointment_type" class="form-select" required>
+                                        <option value="Walk-In">Walk-In (No appointment)</option>
+                                        <option value="Appointment">Scheduled Appointment</option>
+                                    </select>
+                                </div>
+                            </div>
+                            
+                            <div class="row mb-3">
+                                <div class="col-6">
+                                    <label class="form-label fw-bold">Date of Birth</label>
+                                    <input type="date" name="date_of_birth" class="form-control" required>
+                                </div>
+                                <div class="col-6">
+                                    <label class="form-label fw-bold">Sex</label>
+                                    <select name="sex" class="form-select" required>
+                                        <option value="Male">Male</option>
+                                        <option value="Female">Female</option>
+                                        <option value="Other">Other</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label fw-bold">Phone Number</label>
+                                <input type="text" name="phone" class="form-control" placeholder="099xxxxxxx">
+                            </div>
+
+                            <div class="mb-4">
+                                <label class="form-label fw-bold">Location / Area</label>
+                                <input type="text" name="location" class="form-control" placeholder="e.g. Mkwalula" required>
+                            </div>
+
+                            <div class="d-flex justify-content-end gap-2">
+                                <a href="/dashboard" class="btn btn-secondary">Cancel</a>
+                                <button type="submit" id="saveBtn" class="btn btn-success px-4">Save Patient</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/static/js/shell.js"></script>
+    <script src="/static/js/outbox.js"></script>
+    <script>
+    document.addEventListener('DOMContentLoaded', async function () {
+        const { authenticated } = await CMShell.init({ active: 'register' });
+        if (!authenticated) return;
+
+        const form = document.getElementById('registerForm');
+        const saveBtn = document.getElementById('saveBtn');
+        const offlineNotice = document.getElementById('offlineNotice');
+
+        if (!navigator.onLine) {
+            offlineNotice.style.display = 'block';
+        }
+
+        form.addEventListener('submit', async function (e) {
+            e.preventDefault();
+            saveBtn.disabled = true;
+            saveBtn.textContent = 'Saving...';
+
+            const payload = {
+                name: form.name.value.trim(),
+                date_of_birth: form.date_of_birth.value,
+                sex: form.sex.value,
+                phone: form.phone.value.trim(),
+                location: form.location.value.trim(),
+                appointment_type: form.appointment_type.value
+            };
+
+            const { success } = await cmQueueRegistration(payload);
+
+            if (success) {
+                window.location.href = '/queue';
+            } else {
+                const reason = navigator.onLine
+                    ? "You're connected but the server isn't responding."
+                    : "Turn on your internet.";
+                alert(`✅ Patient saved locally! ${reason} Go to the Queue to confirm once connected.`);
+                form.reset();
+                saveBtn.disabled = false;
+                saveBtn.textContent = 'Save Patient';
+            }
+        });
+    });
+    </script>
+</body>
+</html>

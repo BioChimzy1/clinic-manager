@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Finance — ClinicManager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#0A3530">
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+    <main>
+        <div class="container">
+            <div class="app-container">
+                <div id="cmFlashContainer"></div>
+                
+                <div class="row">
+                    <div class="col-12">
+                        <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
+                            <h3 class="mb-0">📊 Finance & Reports</h3>
+                            <div class="btn-group">
+                                <button class="btn btn-sm period-btn" data-period="today">Today</button>
+                                <button class="btn btn-sm period-btn" data-period="week">Week</button>
+                                <button class="btn btn-sm period-btn" data-period="month">Month</button>
+                            </div>
+                        </div>
+
+                        <!-- Stats Cards -->
+                        <div class="row g-3 mb-4" id="financeStats">
+                            <div class="col-md-4">
+                                <div class="card shadow-sm p-3 border-start border-4 border-success">
+                                    <div class="d-flex justify-content-between">
+                                        <div>
+                                            <small class="text-muted">Total Cash</small>
+                                            <h4 class="mb-0 text-success" id="statTotalCash">MK 0.00</h4>
+                                        </div>
+                                        <span class="display-6 text-success">💰</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="card shadow-sm p-3 border-start border-4 border-warning">
+                                    <div class="d-flex justify-content-between">
+                                        <div>
+                                            <small class="text-muted">Outstanding Loans</small>
+                                            <h4 class="mb-0 text-warning" id="statOutstandingLoans">MK 0.00</h4>
+                                        </div>
+                                        <span class="display-6 text-warning">📋</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="card shadow-sm p-3 border-start border-4 border-info">
+                                    <div class="d-flex justify-content-between">
+                                        <div>
+                                            <small class="text-muted">Discounts Given</small>
+                                            <h4 class="mb-0 text-info" id="statDiscounts">MK 0.00</h4>
+                                        </div>
+                                        <span class="display-6 text-info">🏷️</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="card shadow-sm p-3 border-start border-4 border-primary">
+                                    <div class="d-flex justify-content-between">
+                                        <div>
+                                            <small class="text-muted">Net Revenue</small>
+                                            <h4 class="mb-0 text-primary" id="statNetRevenue">MK 0.00</h4>
+                                        </div>
+                                        <span class="display-6 text-primary">📈</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="card shadow-sm p-3 border-start border-4 border-secondary">
+                                    <div class="d-flex justify-content-between">
+                                        <div>
+                                            <small class="text-muted">Total Expenses</small>
+                                            <h4 class="mb-0 text-secondary" id="statExpenses">MK 0.00</h4>
+                                        </div>
+                                        <span class="display-6 text-secondary">💸</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="card shadow-sm p-3 border-start border-4 border-success">
+                                    <div class="d-flex justify-content-between">
+                                        <div>
+                                            <small class="text-muted">Net Profit</small>
+                                            <h4 class="mb-0 text-success" id="statNetProfit">MK 0.00</h4>
+                                        </div>
+                                        <span class="display-6 text-success">📊</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Recent Transactions & Expenses -->
+                        <div class="row">
+                            <div class="col-md-7">
+                                <div class="card shadow-sm">
+                                    <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                                        <h6 class="mb-0">Transactions</h6>
+                                        <small class="text-muted" id="periodLabel">Today</small>
+                                    </div>
+                                    <div class="card-body p-0">
+                                        <div class="table-responsive">
+                                            <table class="table table-sm table-striped mb-0">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Patient</th>
+                                                        <th>Summary</th>
+                                                        <th class="text-end">Visit Total</th>
+                                                        <th class="text-end">Outstanding</th>
+                                                        <th>Status</th>
+                                                        <th></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody id="transactions-tbody">
+                                                    <tr>
+                                                        <td colspan="6" class="text-center text-muted py-3">Loading transactions...</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                        <div class="text-center p-2" id="load-more-container" style="display: none;">
+                                            <button type="button" id="load-more-transactions" class="btn btn-outline-dark btn-sm">Load more</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="col-md-5">
+                                <div class="card shadow-sm">
+                                    <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                                        <h6 class="mb-0">💸 Expenses</h6>
+                                        <button class="btn btn-sm btn-success" type="button" data-bs-toggle="collapse" data-bs-target="#addExpenseForm">➕ Add</button>
+                                    </div>
+                                    <div class="collapse" id="addExpenseForm">
+                                        <div class="card-body bg-light">
+                                            <form id="addExpenseForm">
+                                                <div class="mb-2">
+                                                    <label class="form-label small fw-bold">Date</label>
+                                                    <input type="date" name="expense_date" class="form-control form-control-sm" required>
+                                                </div>
+                                                <div class="mb-2">
+                                                    <label class="form-label small fw-bold">Category</label>
+                                                    <select name="category" class="form-select form-select-sm">
+                                                        <option value="Transport">Transport</option>
+                                                        <option value="Utilities">Utilities (Electricity/Water)</option>
+                                                        <option value="Supplies">Medical Supplies</option>
+                                                        <option value="Staff">Staff Welfare</option>
+                                                        <option value="Other">Other</option>
+                                                    </select>
+                                                </div>
+                                                <div class="mb-2">
+                                                    <label class="form-label small fw-bold">Description</label>
+                                                    <input type="text" name="description" class="form-control form-control-sm" placeholder="e.g. Fuel for pickup" required>
+                                                </div>
+                                                <div class="mb-2">
+                                                    <label class="form-label small fw-bold">Amount (MK)</label>
+                                                    <input type="number" step="0.01" name="amount" class="form-control form-control-sm" placeholder="e.g. 500.00" required>
+                                                </div>
+                                                <button type="submit" class="btn btn-success btn-sm w-100">Save Expense</button>
+                                            </form>
+                                        </div>
+                                    </div>
+                                    <div class="card-body p-0">
+                                        <div class="table-responsive">
+                                            <table class="table table-sm table-striped mb-0">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Date</th>
+                                                        <th>Category</th>
+                                                        <th>Description</th>
+                                                        <th class="text-end">Amount</th>
+                                                        <th></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody id="expenses-tbody">
+                                                    <tr>
+                                                        <td colspan="5" class="text-center text-muted py-3">Loading expenses...</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/static/js/shell.js"></script>
+    <script src="/static/js/outbox.js"></script>
+    <script>
+    let currentPeriod = 'today';
+    let currentOffset = 0;
+
+    document.addEventListener('DOMContentLoaded', async function () {
+        const { authenticated } = await CMShell.init({ active: 'finance' });
+        if (!authenticated) return;
+
+        loadFinance('today');
+        loadTransactions('today', 0);
+        loadExpenses('today');
+
+        // Period buttons
+        document.querySelectorAll('.period-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const period = this.dataset.period;
+                currentPeriod = period;
+                currentOffset = 0;
+                
+                // Update button styles
+                document.querySelectorAll('.period-btn').forEach(b => b.className = 'btn btn-sm period-btn');
+                this.className = 'btn btn-sm btn-dark period-btn';
+                document.getElementById('periodLabel').textContent = period.charAt(0).toUpperCase() + period.slice(1);
+                
+                loadFinance(period);
+                loadTransactions(period, 0);
+                loadExpenses(period);
+            });
+        });
+
+        // Load more transactions
+        document.getElementById('load-more-transactions').addEventListener('click', function() {
+            const btn = this;
+            btn.disabled = true;
+            btn.textContent = 'Loading...';
+            
+            currentOffset += 20;
+            loadTransactions(currentPeriod, currentOffset, true);
+        });
+
+        // Add expense
+        document.getElementById('addExpenseForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const formData = new FormData(this);
+            const data = {};
+            formData.forEach((value, key) => { data[key] = value; });
+
+            const res = await fetch('/api/finance/expenses/add', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            const result = await res.json();
+            if (result.success) {
+                this.reset();
+                bootstrap.Collapse.getInstance(document.getElementById('addExpenseForm')).hide();
+                loadFinance(currentPeriod);
+                loadExpenses(currentPeriod);
+            } else {
+                alert('Error: ' + (result.error || 'Could not add expense'));
+            }
+        });
+    });
+
+    async function loadFinance(period) {
+        try {
+            const res = await fetch('/api/finance/stats?period=' + period);
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+            renderFinanceStats(data);
+        } catch (err) {
+            console.error('Failed to load finance stats:', err);
+        }
+    }
+
+    function renderFinanceStats(data) {
+        document.getElementById('statTotalCash').textContent = 'MK ' + (data.total_cash / 100).toFixed(2);
+        document.getElementById('statOutstandingLoans').textContent = 'MK ' + (data.outstanding_loans / 100).toFixed(2);
+        document.getElementById('statDiscounts').textContent = 'MK ' + (data.total_discounts / 100).toFixed(2);
+        document.getElementById('statNetRevenue').textContent = 'MK ' + (data.net_revenue / 100).toFixed(2);
+        document.getElementById('statExpenses').textContent = 'MK ' + (data.total_expenses / 100).toFixed(2);
+        
+        const profit = data.net_profit;
+        const profitEl = document.getElementById('statNetProfit');
+        profitEl.textContent = 'MK ' + (profit / 100).toFixed(2);
+        profitEl.className = profit >= 0 ? 'mb-0 text-success' : 'mb-0 text-danger';
+    }
+
+    async function loadTransactions(period, offset, append = false) {
+        try {
+            const res = await fetch('/api/finance/transactions?period=' + period + '&offset=' + offset);
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+            renderTransactions(data, append);
+        } catch (err) {
+            console.error('Failed to load transactions:', err);
+        }
+    }
+
+    function renderTransactions(data, append) {
+        const tbody = document.getElementById('transactions-tbody');
+        const loadMoreContainer = document.getElementById('load-more-container');
+        const loadMoreBtn = document.getElementById('load-more-transactions');
+
+        if (!append) {
+            tbody.innerHTML = '';
+        }
+
+        // ✅ FIX: Safely handle cases where transactions might be undefined or null
+        const transactions = data.transactions || [];
+
+        if (transactions.length === 0 && !append) {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">No transactions in this period.</td></tr>';
+            loadMoreContainer.style.display = 'none';
+            return;
+        }
+
+        const todayStr = new Date().toISOString().slice(0, 10);
+
+        transactions.forEach(gt => {
+            const tr = document.createElement('tr');
+            tr.className = 'main-row';
+            
+            const summaryLabel = gt.summary_date === todayStr 
+                ? '<span class="text-success fw-bold">Today</span>' 
+                : gt.summary_date;
+            
+            tr.innerHTML = `
+                <td>
+                    <strong>${cmEscapeHtml(gt.patient)}</strong>
+                    ${gt.discount_amount > 0 ? `<br><small class="text-muted">Discount: MK ${(gt.discount_amount / 100).toFixed(2)}</small>` : ''}
+                    ${gt.is_retail ? '<span class="badge bg-success ms-1">Retail</span>' : ''}
+                </td>
+                <td>
+                    <small>${summaryLabel}</small>
+                    <br><small class="text-muted">MK ${(gt.summary_amount / 100).toFixed(2)}</small>
+                </td>
+                <td class="text-end">MK ${(gt.total_fee / 100).toFixed(2)}</td>
+                <td class="text-end text-danger fw-bold">MK ${(gt.outstanding / 100).toFixed(2)}</td>
+                <td>
+                    <span class="badge ${gt.status === 'Paid' ? 'bg-success' : 'bg-info text-dark'}">
+                        ${gt.status}
+                    </span>
+                </td>
+                <td class="text-end">
+                    <div class="d-flex justify-content-end gap-2">
+                        ${gt.status === 'Loan Active' ? `<a href="/static/pages/loan_details.html?visit_id=${gt.visit_id}" class="btn btn-outline-primary btn-sm">View Loan</a>` : ''}
+                        <button type="button" class="btn btn-outline-secondary btn-sm toggle-installments" data-target="#inst-${gt.visit_id}">▾ Installments</button>
+                    </div>
+                </td>
+            `;
+            tbody.appendChild(tr);
+
+            // Installments row
+            if (gt.installments && gt.installments.length > 0) {
+                const instRow = document.createElement('tr');
+                instRow.id = 'inst-' + gt.visit_id;
+                instRow.className = 'installments-row';
+                instRow.style.display = 'none';
+                instRow.style.background = 'rgba(0,0,0,0.02)';
+                
+                let instHtml = '<td colspan="6" style="padding: .5rem 1rem;"><div class="small"><strong>Payment History</strong><div class="table-responsive mt-2"><table class="table table-sm mb-0"><thead><tr><th>Date</th><th class="text-end">Amount</th></tr></thead><tbody>';
+                gt.installments.forEach(inst => {
+                    instHtml += `<tr><td><small>${inst.date}</small></td><td class="text-end">MK ${(inst.amount / 100).toFixed(2)}</td></tr>`;
+                });
+                instHtml += '</tbody></table></div></div></td>';
+                instRow.innerHTML = instHtml;
+                tbody.appendChild(instRow);
+            }
+        });
+
+        // Show load more button if more data available
+        if (data.has_more) {
+            loadMoreContainer.style.display = 'block';
+            loadMoreBtn.disabled = false;
+            loadMoreBtn.textContent = 'Load more';
+        } else {
+            loadMoreContainer.style.display = 'none';
+        }
+
+        // Attach toggle handlers
+        tbody.querySelectorAll('.toggle-installments').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const target = document.querySelector(this.dataset.target);
+                if (target) {
+                    target.style.display = target.style.display === 'none' ? 'table-row' : 'none';
+                }
+            });
+        });
+    }
+
+    async function loadExpenses(period) {
+        try {
+            const res = await fetch('/api/finance/expenses?period=' + period);
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+            renderExpenses(data);
+        } catch (err) {
+            console.error('Failed to load expenses:', err);
+        }
+    }
+
+    function renderExpenses(data) {
+        const tbody = document.getElementById('expenses-tbody');
+        const expenses = data.expenses || [];
+
+        if (expenses.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">No expenses recorded.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = expenses.map(exp => `
+            <tr>
+                <td><small>${exp.date ? exp.date.slice(0, 10) : ''}</small></td>
+                <td><span class="badge bg-secondary">${cmEscapeHtml(exp.category)}</span></td>
+                <td><small>${cmEscapeHtml(exp.description)}</small></td>
+                <td class="text-end text-danger">MK ${(exp.amount / 100).toFixed(2)}</td>
+                <td class="text-end">
+                    <button class="btn btn-outline-danger btn-sm py-0 px-2 delete-expense-btn" data-id="${exp.id}">✕</button>
+                </td>
+            </tr>
+        `).join('');
+
+        // Delete expense handlers
+        document.querySelectorAll('.delete-expense-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                if (!confirm('Delete this expense?')) return;
+                fetch('/api/finance/expenses/delete/' + this.dataset.id, { method: 'DELETE' })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.success) {
+                            loadExpenses(currentPeriod);
+                            loadFinance(currentPeriod);
+                        } else {
+                            alert('Error: ' + (data.error || 'Could not delete expense'));
+                        }
+                    });
+            });
+        });
+    }
+
+    function cmEscapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str || '';
+        return div.innerHTML;
+    }
+    </script>
+</body>
+</html>

@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Review Appointment — ClinicManager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#0A3530">
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/app.css">
+    <style>
+        .bg-purple {
+            background-color: #6f42c1 !important;
+            color: white !important;
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <div class="container">
+            <div class="app-container">
+                <div id="cmFlashContainer"></div>
+                
+                <div class="row mx-auto" style="max-width: 700px;">
+                    <div class="col-12">
+                        <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
+                            <div>
+                                <h3 class="mb-0">📋 Review Appointment</h3>
+                                <small class="text-muted" id="patientInfo">Loading...</small>
+                            </div>
+                            <a href="/queue" class="btn btn-secondary btn-sm">← Back to Queue</a>
+                        </div>
+
+                        <div class="card mb-4">
+                            <div class="card-header bg-warning text-dark">
+                                <h6 class="mb-0">⏳ Pending Appointment Details</h6>
+                            </div>
+                            <div class="card-body" id="appointmentDetails">
+                                <dl class="row mb-0">
+                                    <dt class="col-sm-3">Appointment Date:</dt>
+                                    <dd class="col-sm-9" id="apptDate">—</dd>
+                                    
+                                    <dt class="col-sm-3">Reason:</dt>
+                                    <dd class="col-sm-9" id="apptReason">—</dd>
+                                    
+                                    <dt class="col-sm-3">Current Status:</dt>
+                                    <dd class="col-sm-9"><span class="badge bg-purple">Pending</span></dd>
+                                </dl>
+                            </div>
+                        </div>
+
+                        <form id="reviewForm">
+                            <h5 class="mb-3">Doctor Action</h5>
+                            
+                            <div class="mb-3">
+                                <div class="btn-group w-100" role="group">
+                                    <input type="radio" class="btn-check" name="action" id="actionConfirm" value="confirm" checked>
+                                    <label class="btn btn-outline-success" for="actionConfirm">✅ Confirm Appointment</label>
+                                    
+                                    <input type="radio" class="btn-check" name="action" id="actionCancel" value="cancel">
+                                    <label class="btn btn-outline-danger" for="actionCancel">❌ Cancel Appointment</label>
+                                    
+                                    <input type="radio" class="btn-check" name="action" id="actionReschedule" value="reschedule">
+                                    <label class="btn btn-outline-warning" for="actionReschedule">📅 Reschedule</label>
+                                </div>
+                            </div>
+
+                            <!-- Cancel Reason -->
+                            <div class="mb-3 collapse" id="cancelReasonDiv">
+                                <label class="form-label fw-bold">Reason for Cancellation</label>
+                                <input type="text" name="reason" class="form-control" placeholder="e.g. Patient unwell, doctor unavailable">
+                            </div>
+
+                            <!-- Reschedule Date -->
+                            <div class="mb-3 collapse" id="rescheduleDateDiv">
+                                <label class="form-label fw-bold">New Appointment Date & Time</label>
+                                <input type="datetime-local" name="new_date" class="form-control">
+                            </div>
+
+                            <div class="d-flex gap-2">
+                                <a href="/queue" class="btn btn-secondary">Cancel</a>
+                                <button type="submit" class="btn btn-primary w-100">Process Action</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/static/js/shell.js"></script>
+    <script>
+    // Get patient_id from URL path
+    const urlParams = new URLSearchParams(window.location.search);
+const patientId = urlParams.get('patient_id');
+
+if (!patientId) {
+    alert('No patient ID provided. Go back to the queue.');
+    window.location.href = '/queue';
+}
+
+    document.addEventListener('DOMContentLoaded', async function () {
+        const { authenticated } = await CMShell.init({ active: 'review_appointment' });
+        if (!authenticated) return;
+
+        loadAppointmentReview(patientId);
+
+        // Toggle fields
+        const confirmRadio = document.getElementById('actionConfirm');
+        const cancelRadio = document.getElementById('actionCancel');
+        const reschedRadio = document.getElementById('actionReschedule');
+        const cancelDiv = document.getElementById('cancelReasonDiv');
+        const reschedDiv = document.getElementById('rescheduleDateDiv');
+
+        function toggleFields() {
+            cancelDiv.classList.toggle('show', cancelRadio.checked);
+            reschedDiv.classList.toggle('show', reschedRadio.checked);
+        }
+
+        confirmRadio.addEventListener('change', toggleFields);
+        cancelRadio.addEventListener('change', toggleFields);
+        reschedRadio.addEventListener('change', toggleFields);
+        toggleFields();
+
+        // Form submit
+        document.getElementById('reviewForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const formData = new FormData(this);
+            const data = {};
+            formData.forEach((value, key) => { data[key] = value; });
+
+            const btn = this.querySelector('button[type="submit"]');
+            btn.disabled = true;
+            btn.textContent = 'Processing...';
+
+            try {
+                const res = await fetch('/api/appointments/review/' + patientId, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                const result = await res.json();
+                if (result.success) {
+                    window.location.href = '/queue';
+                } else {
+                    alert('Error: ' + (result.error || 'Could not process action'));
+                    btn.disabled = false;
+                    btn.textContent = 'Process Action';
+                }
+            } catch (err) {
+                alert('Network error. Please try again.');
+                btn.disabled = false;
+                btn.textContent = 'Process Action';
+            }
+        });
+    });
+
+    async function loadAppointmentReview(id) {
+        try {
+            const res = await fetch('/api/appointments/review/' + id);
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+            renderReview(data);
+        } catch (err) {
+            document.getElementById('patientInfo').textContent = 'Error loading appointment';
+            console.error(err);
+        }
+    }
+
+    function renderReview(data) {
+        document.getElementById('patientInfo').textContent = 
+            `${data.patient_name} · ${data.patient_sex} · DOB ${data.patient_dob || ''} · Phone: ${data.patient_phone || ''}`;
+
+        document.getElementById('apptDate').textContent = data.appointment_date ? data.appointment_date.slice(0, 16) : '—';
+        document.getElementById('apptReason').textContent = data.appointment_reason || 'Consultation';
+    }
+    </script>
+</body>
+</html>

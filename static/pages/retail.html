@@ -1,0 +1,955 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Retail Sales — ClinicManager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#0A3530">
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+    <main>
+        <div class="container">
+            <div class="app-container">
+                <div id="cmFlashContainer"></div>
+                
+                <div class="row">
+                    <div class="col-12">
+                        <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
+                            <h3 class="mb-0">🏪 Pharmacy Retail Sale</h3>
+                        </div>
+
+                        <!-- Pending Retail Sales -->
+                        <div class="card shadow-sm mb-4" id="pendingRetailCard" style="display: none;">
+                            <div class="card-header bg-warning text-dark">
+                                <h5 class="mb-0">⏳ Pending Retail Sales</h5>
+                            </div>
+                            <div class="card-body p-0">
+                                <div class="table-responsive">
+                                    <table class="table table-sm table-striped align-middle mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th>Started</th>
+                                                <th class="text-end">Total (MK)</th>
+                                                <th class="text-end">Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="pendingRetailBody"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="card shadow-sm mb-4">
+                            <div class="card-header bg-success text-white">
+                                <h5 class="mb-0">🛒 Add Items</h5>
+                            </div>
+                            <div class="card-body">
+                                <div class="row g-2">
+                                    <div class="col-md-8" style="position: relative;">
+                                        <input type="text" id="itemSearchInput" class="form-control" placeholder="Type to search price list..." autocomplete="off">
+                                        <div id="searchResults" class="bg-white border rounded shadow-sm" style="display: none; position: absolute; width: 100%; max-height: 260px; overflow-y: auto; z-index: 1050; top: 100%; left: 0; margin-top: 2px;"></div>
+                                    </div>
+                                    <div class="col-md-2">
+                                        <input type="number" id="qtyInput" class="form-control" value="1" min="1">
+                                    </div>
+                                    <div class="col-md-2">
+                                        <button type="button" class="btn btn-primary w-100" id="addToCartBtn" disabled>➕ Add</button>
+                                    </div>
+                                </div>
+                                <div id="selectedItemLabel" class="mt-2 small text-muted">No item selected yet -- search above and pick one.</div>
+                            </div>
+                        </div>
+
+                        <!-- Shopping Cart -->
+                        <div class="card shadow-sm">
+                            <div class="card-header bg-dark text-white">
+                                <h5 class="mb-0">🧾 Current Sale</h5>
+                            </div>
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table table-sm table-striped align-middle">
+                                        <thead>
+                                            <tr>
+                                                <th>Item</th>
+                                                <th class="text-end">Unit Price</th>
+                                                <th class="text-end">Qty</th>
+                                                <th class="text-end">Total</th>
+                                                <th></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="cartBody">
+                                            <tr id="emptyCartRow">
+                                                <td colspan="5" class="text-center text-muted py-3">No items added yet. Select an item above and click Add.</td>
+                                            </tr>
+                                        </tbody>
+                                        <tfoot>
+                                            <tr>
+                                                <th colspan="3" class="text-end">Grand Total</th>
+                                                <th class="text-end" id="grandTotal">MK 0.00</th>
+                                                <th></th>
+                                            </tr>
+                                        </tfoot>
+                                    </table>
+                                </div>
+                                <div class="mt-3 text-end">
+                                    <button class="btn btn-success px-4" id="proceedToPaymentBtn" disabled>💳 Proceed to Payment</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Payment Modal (embedded from payment_modal.html) -->
+    <div class="modal fade" id="paymentModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header bg-dark text-white">
+                    <h5 class="modal-title">💳 Process Payment</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="modalPatientInfo" class="mb-3">
+                        <h6 id="modalPatientName" class="mb-0"></h6>
+                        <small class="text-muted">Total: <span id="modalTotalFee">MK 0.00</span></small>
+                    </div>
+
+                    <div class="table-responsive mb-3">
+                        <table class="table table-sm table-bordered">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Type</th>
+                                    <th>Item</th>
+                                    <th class="text-end">Unit Price</th>
+                                    <th class="text-end">Qty</th>
+                                    <th class="text-end">Total</th>
+                                </tr>
+                            </thead>
+                            <tbody id="invoiceItemsBody">
+                                <tr><td colspan="5" class="text-center text-muted">Loading items...</td></tr>
+                            </tbody>
+                            <tfoot>
+                                <tr>
+                                    <th colspan="4" class="text-end">Grand Total</th>
+                                    <th class="text-end" id="invTotal">MK 0.00</th>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+
+                    <hr>
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Round Total To Nearest (MK)</label>
+                            <select id="roundingSelect" class="form-select">
+                                <option value="0" selected>No rounding</option>
+                                <option value="100">100</option>
+                                <option value="200">200</option>
+                                <option value="300">300</option>
+                                <option value="400">400</option>
+                                <option value="500">500</option>
+                                <option value="600">600</option>
+                                <option value="700">700</option>
+                                <option value="800">800</option>
+                                <option value="900">900</option>
+                                <option value="1000">1000</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Rounded Total</label>
+                            <input type="text" id="roundedTotalDisplay" class="form-control" value="MK 0.00" readonly>
+                        </div>
+                    </div>
+
+                    <hr>
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Discount Amount (MK)</label>
+                            <div class="input-group">
+                                <input type="number" step="0.01" id="discountAmount" class="form-control" placeholder="0.00" min="0">
+                                <button class="btn btn-outline-danger" type="button" id="clearDiscountBtn">✕</button>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Discount Reason <span class="text-danger">*</span></label>
+                            <input type="text" id="discountReason" class="form-control" placeholder="e.g. Staff discount">
+                        </div>
+                    </div>
+
+                    <hr>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">How much is the patient paying <strong>now</strong>?</label>
+                        <div class="btn-group w-100 mb-2" role="group">
+                            <input type="radio" class="btn-check" name="payMode" id="payFull" value="full" checked>
+                            <label class="btn btn-outline-success" for="payFull">💰 Pay Full Amount</label>
+                            
+                            <input type="radio" class="btn-check" name="payMode" id="payPartial" value="partial">
+                            <label class="btn btn-outline-warning" for="payPartial">💳 Pay Partial / Loan</label>
+                        </div>
+                    </div>
+
+                    <div id="fullPaymentInfo" class="alert alert-success">
+                        <p class="mb-0">The patient will pay the full remaining amount: <strong id="fullAmountDisplay">MK 0.00</strong></p>
+                    </div>
+
+                    <div id="partialPaymentFields" style="display: none;">
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Amount Paid Now (MK) <span class="text-danger">*</span></label>
+                            <input type="number" step="0.01" id="loanAmount" class="form-control" placeholder="e.g. 1500.00" min="0">
+                            <small class="text-muted">Remaining balance: <span id="loanRemainingDisplay">MK 0.00</span></small>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Witness <span class="text-danger">*</span></label>
+                            <select id="loanWitness" class="form-select">
+                                <option value="">-- Select a staff member --</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Due Date (Optional)</label>
+                            <input type="date" id="loanDueDate" class="form-control">
+                        </div>
+                    </div>
+
+                    <hr>
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Payment Channel</label>
+                            <select id="paymentChannel" class="form-select">
+                                <option value="Cash">Cash</option>
+                                <option value="Airtel Money">Airtel Money</option>
+                                <option value="TNM Mpamba">TNM Mpamba</option>
+                                <option value="Bank Transfer">Bank Transfer</option>
+                                <option value="Cheque">Cheque</option>
+                                <option value="Medical Aid">Medical Aid</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6" id="refFieldWrapper" style="display: none;">
+                            <label class="form-label fw-bold" id="refLabel">Reference / Phone Number</label>
+                            <input type="text" id="paymentReference" class="form-control" placeholder="Enter account/phone number">
+                        </div>
+                    </div>
+
+                    <div id="medicalAidFields" style="display: none;" class="row mb-3">
+                        <div class="col-md-12">
+                            <label class="form-label fw-bold">Medical Aid Company</label>
+                            <input type="text" id="medicalAidCompany" class="form-control" placeholder="e.g. MASM, NICO">
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-outline-warning" id="sendBackBtn">↩ Send Back</button>
+                    <button type="button" class="btn btn-success" id="confirmPaymentBtn">✅ Confirm & Complete</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/shell.js"></script>
+    <script src="/static/js/outbox.js"></script>
+    <script>
+    let allItems = [];
+    let cart = [];
+    let retailVisitId = null;
+    let retailTotal = 0;
+    let selectedItem = null;
+
+    document.addEventListener('DOMContentLoaded', async function () {
+        const { authenticated } = await CMShell.init({ active: 'retail' });
+        if (!authenticated) return;
+
+        await loadRetailItems();
+        loadPendingRetail();
+        loadStaffList();
+    });
+
+    async function loadRetailItems() {
+        try {
+            const res = await fetch('/api/retail/items');
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+            allItems = data.items || [];
+            setupRetailUI();
+        } catch (err) {
+            console.error('Failed to load retail items:', err);
+        }
+    }
+
+    function setupRetailUI() {
+        const searchInput = document.getElementById('itemSearchInput');
+        const searchResults = document.getElementById('searchResults');
+        const qtyInput = document.getElementById('qtyInput');
+        const addToCartBtn = document.getElementById('addToCartBtn');
+        const selectedItemLabel = document.getElementById('selectedItemLabel');
+
+        function isSelectable(item) {
+            if (item.noStockConcept) return true;
+            return item.usableQty > 0;
+        }
+
+        function closeSearchResults() {
+            searchResults.style.display = 'none';
+            searchResults.innerHTML = '';
+        }
+
+        function clearSelectedItem() {
+            selectedItem = null;
+            addToCartBtn.disabled = true;
+            selectedItemLabel.textContent = 'No item selected yet -- search above and pick one.';
+            selectedItemLabel.className = 'mt-2 small text-muted';
+        }
+
+        function pickItem(item) {
+            selectedItem = item;
+            searchInput.value = item.name;
+            closeSearchResults();
+            addToCartBtn.disabled = false;
+            selectedItemLabel.innerHTML = `Selected: <strong>${item.name}</strong> <span class="text-muted">(${item.type}, MK ${(item.price / 100).toFixed(2)} per pack of ${item.packQty}${item.noStockConcept ? '' : ', ' + item.usableQty + ' in stock'})</span>`;
+            selectedItemLabel.className = 'mt-2 small';
+            qtyInput.value = '1';
+            qtyInput.focus();
+        }
+
+        searchInput.addEventListener('input', function() {
+            clearSelectedItem();
+            const query = this.value.trim().toLowerCase();
+            if (query.length === 0) { closeSearchResults(); return; }
+
+            const matches = allItems.filter(item => item.name.toLowerCase().includes(query));
+            searchResults.innerHTML = '';
+
+            if (matches.length === 0) {
+                searchResults.innerHTML = '<div class="p-3 text-muted small">No matches found.</div>';
+                searchResults.style.display = 'block';
+                return;
+            }
+
+            matches.forEach(item => {
+                const selectable = isSelectable(item);
+                const div = document.createElement('div');
+                div.className = 'p-2 border-bottom' + (selectable ? ' bg-white' : ' bg-light text-muted');
+                div.style.cursor = selectable ? 'pointer' : 'not-allowed';
+
+                let statusBadge = '';
+                let qtyLabel = '';
+                if (!item.noStockConcept) {
+                    qtyLabel = ` <strong>${item.usableQty}</strong> in stock`;
+                    statusBadge = item.usableQty > 0
+                        ? '<span class="badge bg-success ms-1">✅ Available</span>'
+                        : '<span class="badge bg-secondary ms-1">🚫 Out of stock</span>';
+                }
+
+                div.innerHTML = `<strong>${item.name}</strong> <small class="text-muted">(${item.type}, MK ${(item.price / 100).toFixed(2)} per pack of ${item.packQty}${qtyLabel})</small> ${statusBadge}`;
+
+                if (selectable) {
+                    div.addEventListener('click', () => pickItem(item));
+                }
+                searchResults.appendChild(div);
+            });
+
+            searchResults.style.display = 'block';
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!searchResults.contains(e.target) && e.target !== searchInput) {
+                closeSearchResults();
+            }
+        });
+
+        document.getElementById('addToCartBtn').addEventListener('click', function() {
+            if (!selectedItem) {
+                alert('Please search for and select an item first.');
+                return;
+            }
+
+            const qty = parseInt(qtyInput.value, 10);
+            if (isNaN(qty) || qty < 1) {
+                alert('Please enter a valid quantity.');
+                return;
+            }
+
+            if (!selectedItem.noStockConcept && qty > selectedItem.usableQty) {
+                alert(`Only ${selectedItem.usableQty} unit(s) of "${selectedItem.name}" available.`);
+                return;
+            }
+
+            cart.push({
+                price_list_id: parseInt(selectedItem.id, 10),
+                name: selectedItem.name,
+                type: selectedItem.type,
+                price: selectedItem.price,
+                packQty: selectedItem.packQty,
+                usableQty: selectedItem.usableQty,
+                noStockConcept: selectedItem.noStockConcept,
+                qty: qty
+            });
+
+            renderCart();
+            searchInput.value = '';
+            qtyInput.value = '1';
+            clearSelectedItem();
+            searchInput.focus();
+        });
+
+        document.getElementById('cartBody').addEventListener('click', function(e) {
+            if (e.target.classList.contains('remove-item-btn')) {
+                const index = parseInt(e.target.dataset.index);
+                cart.splice(index, 1);
+                renderCart();
+            }
+        });
+
+        // Proceed to Payment
+        document.getElementById('proceedToPaymentBtn').addEventListener('click', function() {
+            if (cart.length === 0) return;
+
+            fetch('/api/retail/create_draft', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cart: cart })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    retailVisitId = data.visit_id;
+                    retailTotal = cart.reduce((sum, item) => sum + calculateLineTotal(item, item.qty), 0);
+
+                    document.getElementById('modalPatientName').textContent = '🏪 Retail Sale';
+                    document.getElementById('modalTotalFee').textContent = 'MK ' + (retailTotal / 100).toFixed(2);
+                    document.getElementById('fullAmountDisplay').textContent = 'MK ' + (retailTotal / 100).toFixed(2);
+
+                    document.getElementById('discountAmount').value = '';
+                    document.getElementById('discountReason').value = '';
+                    document.getElementById('loanAmount').value = '';
+                    document.getElementById('loanWitness').value = '';
+                    document.getElementById('loanDueDate').value = '';
+                    document.getElementById('paymentReference').value = '';
+                    document.getElementById('paymentChannel').value = 'Cash';
+                    document.getElementById('medicalAidCompany').value = '';
+                    document.getElementById('medicalAidFields').style.display = 'none';
+                    document.getElementById('refFieldWrapper').style.display = 'none';
+                    document.getElementById('roundingSelect').value = '0';
+                    updateRoundedTotalDisplay();
+
+                    document.getElementById('payFull').checked = true;
+                    togglePaymentMode('full');
+
+                    document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-muted">Loading items...</td></tr>';
+                    const paymentModal = new bootstrap.Modal(document.getElementById('paymentModal'));
+                    paymentModal.show();
+
+                    let html = '';
+                    cart.forEach(item => {
+                        const packQuantity = item.packQty > 0 ? item.packQty : 1;
+                        const unitPrice = item.price / packQuantity;
+                        const lineTotal = calculateLineTotal(item, item.qty);
+                        html += `
+                            <tr>
+                                <td><span class="badge bg-info text-dark">${item.type}</span></td>
+                                <td><strong>${item.name}</strong></td>
+                                <td class="text-end">MK ${(unitPrice / 100).toFixed(2)}</td>
+                                <td class="text-end">${item.qty}</td>
+                                <td class="text-end">MK ${(lineTotal / 100).toFixed(2)}</td>
+                            </tr>
+                        `;
+                    });
+                    document.getElementById('invoiceItemsBody').innerHTML = html;
+                    document.getElementById('invTotal').textContent = 'MK ' + (retailTotal / 100).toFixed(2);
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            })
+            .catch(err => {
+                console.error(err);
+                alert('Network error. Could not create sale.');
+            });
+        });
+    }
+
+    function calculateLineTotal(item, qty) {
+        const packQuantity = (item.packQty && item.packQty > 0) ? item.packQty : 1;
+        const pricePerUnit = item.price / packQuantity;
+        return Math.round(pricePerUnit * qty);
+    }
+
+    function renderCart() {
+        const tbody = document.getElementById('cartBody');
+        const emptyRow = document.getElementById('emptyCartRow');
+        const grandTotalEl = document.getElementById('grandTotal');
+        const proceedBtn = document.getElementById('proceedToPaymentBtn');
+
+        tbody.innerHTML = '';
+
+        if (cart.length === 0) {
+            tbody.appendChild(emptyRow);
+            grandTotalEl.textContent = 'MK 0.00';
+            proceedBtn.disabled = true;
+            retailTotal = 0;
+            return;
+        }
+
+        let grandTotal = 0;
+
+        cart.forEach((item, index) => {
+            const packQuantity = item.packQty > 0 ? item.packQty : 1;
+            const unitPrice = item.price / packQuantity;
+            const lineTotal = calculateLineTotal(item, item.qty);
+            grandTotal += lineTotal;
+
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><strong>${item.name}</strong> <small class="text-muted">(${item.type})</small></td>
+                <td class="text-end">MK ${(unitPrice / 100).toFixed(2)}</td>
+                <td>
+                    <input type="number" class="form-control form-control-sm cart-qty-input" value="${item.qty}" data-index="${index}" min="1" style="width: 90px;">
+                </td>
+                <td class="text-end line-total">MK ${(lineTotal / 100).toFixed(2)}</td>
+                <td class="text-end">
+                    <button class="btn btn-outline-danger btn-sm remove-item-btn" data-index="${index}">✕</button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+
+        grandTotalEl.textContent = 'MK ' + (grandTotal / 100).toFixed(2);
+        retailTotal = grandTotal;
+        proceedBtn.disabled = false;
+
+        tbody.querySelectorAll('.cart-qty-input').forEach(input => {
+            input.addEventListener('input', function() {
+                const idx = parseInt(this.dataset.index, 10);
+                const item = cart[idx];
+                if (!item) return;
+
+                let raw = parseInt(this.value, 10);
+                const row = this.closest('tr');
+
+                if (!isNaN(raw) && raw >= 1) {
+                    item.qty = raw;
+                    const lineTotal = calculateLineTotal(item, item.qty);
+                    row.querySelector('.line-total').textContent = 'MK ' + (lineTotal / 100).toFixed(2);
+                    updateGrandTotalOnly();
+                }
+            });
+
+            input.addEventListener('blur', function() {
+                let raw = parseInt(this.value, 10);
+                if (isNaN(raw) || raw < 1) {
+                    this.value = 1;
+                    cart[this.dataset.index].qty = 1;
+                }
+                renderCart();
+            });
+        });
+    }
+
+    function updateGrandTotalOnly() {
+        let grandTotal = 0;
+        cart.forEach((item) => {
+            grandTotal += calculateLineTotal(item, item.qty);
+        });
+        document.getElementById('grandTotal').textContent = 'MK ' + (grandTotal / 100).toFixed(2);
+        retailTotal = grandTotal;
+    }
+
+    // Payment Modal Logic
+    function getRoundedBaseTotal() {
+        const roundTo = parseInt(document.getElementById('roundingSelect').value, 10) || 0;
+        if (roundTo <= 0) return retailTotal;
+        const roundToTambala = roundTo * 100;
+        return Math.round(retailTotal / roundToTambala) * roundToTambala;
+    }
+
+    function updateRoundedTotalDisplay() {
+        const rounded = getRoundedBaseTotal();
+        document.getElementById('roundedTotalDisplay').value = 'MK ' + (rounded / 100).toFixed(2);
+        document.getElementById('modalTotalFee').textContent = 'MK ' + (rounded / 100).toFixed(2);
+        document.getElementById('fullAmountDisplay').textContent = 'MK ' + (getFinalTotal() / 100).toFixed(2);
+        updateLoanRemaining();
+    }
+
+    document.getElementById('roundingSelect').addEventListener('change', updateRoundedTotalDisplay);
+
+    function togglePaymentMode(mode) {
+        document.getElementById('fullPaymentInfo').style.display = mode === 'full' ? 'block' : 'none';
+        document.getElementById('partialPaymentFields').style.display = mode === 'partial' ? 'block' : 'none';
+    }
+
+    document.querySelectorAll('input[name="payMode"]').forEach(radio => {
+        radio.addEventListener('change', function() {
+            togglePaymentMode(this.value);
+        });
+    });
+
+    document.getElementById('discountAmount').addEventListener('input', function() {
+        document.getElementById('fullAmountDisplay').textContent = 'MK ' + (getFinalTotal() / 100).toFixed(2);
+        updateLoanRemaining();
+    });
+
+    function updateLoanRemaining() {
+        const paid = parseFloat(document.getElementById('loanAmount').value) || 0;
+        const remaining = Math.max(0, getFinalTotal() / 100 - paid);
+        document.getElementById('loanRemainingDisplay').textContent = 'MK ' + remaining.toFixed(2);
+    }
+
+    document.getElementById('paymentChannel').addEventListener('change', function() {
+        const val = this.value;
+        const refLabel = document.getElementById('refLabel');
+        const refInput = document.getElementById('paymentReference');
+        const refWrapper = document.getElementById('refFieldWrapper');
+        const medAidFields = document.getElementById('medicalAidFields');
+
+        if (val === 'Airtel Money' || val === 'TNM Mpamba') {
+            refWrapper.style.display = 'block';
+            refLabel.textContent = 'Phone Number / Agent Code';
+            refInput.placeholder = 'e.g. 0991234567';
+            medAidFields.style.display = 'none';
+        } else if (val === 'Bank Transfer') {
+            refWrapper.style.display = 'block';
+            refLabel.textContent = 'Account Number';
+            refInput.placeholder = 'e.g. 1234567890';
+            medAidFields.style.display = 'none';
+        } else if (val === 'Cheque') {
+            refWrapper.style.display = 'block';
+            refLabel.textContent = 'Cheque Number';
+            refInput.placeholder = 'e.g. 001234';
+            medAidFields.style.display = 'none';
+        } else if (val === 'Medical Aid') {
+            refWrapper.style.display = 'none';
+            refInput.value = '';
+            medAidFields.style.display = 'block';
+        } else {
+            refWrapper.style.display = 'none';
+            refInput.value = '';
+            medAidFields.style.display = 'none';
+        }
+    });
+
+    function getFinalTotal() {
+        const discountAmt = parseFloat(document.getElementById('discountAmount').value) * 100 || 0;
+        return Math.max(0, getRoundedBaseTotal() - discountAmt);
+    }
+
+    document.getElementById('confirmPaymentBtn').addEventListener('click', function() {
+        if (!retailVisitId) {
+        alert('Error: No active retail sale found. Please add items first.');
+        this.disabled = false;
+        this.textContent = '✅ Confirm & Complete';
+        return;
+    }
+        const isFull = document.querySelector('input[name="payMode"]:checked').value === 'full';
+        const finalTotal = getFinalTotal();
+
+        const discountAmt = parseFloat(document.getElementById('discountAmount').value) * 100 || 0;
+        const discountReason = document.getElementById('discountReason').value.trim();
+
+        if (discountAmt > 0 && !discountReason) {
+            alert('Please enter a reason for the discount.');
+            return;
+        }
+
+        const roundTo = parseInt(document.getElementById('roundingSelect').value, 10) || 0;
+
+        const payload = {
+            payment_mode: isFull ? 'full' : 'loan',
+            payment_channel: document.getElementById('paymentChannel').value,
+            payment_reference: document.getElementById('paymentReference').value.trim() || null,
+            medical_aid_company: document.getElementById('medicalAidCompany').value.trim() || null,
+            discount_amount: discountAmt,
+            discount_reason: discountReason || null,
+            round_to: roundTo || null,
+            rounded_total: roundTo ? getRoundedBaseTotal() : null
+        };
+
+        if (isFull) {
+            payload.amount_paid = finalTotal;
+        } else {
+            const amountPaid = parseFloat(document.getElementById('loanAmount').value) * 100 || 0;
+            const witness = document.getElementById('loanWitness').value;
+            const dueDate = document.getElementById('loanDueDate').value;
+
+            if (!amountPaid || amountPaid <= 0) {
+                alert('Please enter a valid payment amount for the loan.');
+                return;
+            }
+            if (amountPaid >= finalTotal) {
+                alert('If paying the full amount, please select "Pay Full Amount" instead.');
+                return;
+            }
+            if (!witness) {
+                alert('Witness is required for partial payments/loans.');
+                return;
+            }
+            payload.amount_paid = amountPaid;
+            payload.witness_id = witness;
+            payload.loan_due_date = dueDate || null;
+        }
+
+        const btn = this;
+        btn.disabled = true;
+        btn.textContent = 'Processing...';
+
+        fetch('/api/cashier/process/' + retailVisitId, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                document.getElementById('paymentModal').querySelector('.btn-close').click();
+                location.reload();
+            } else {
+                alert('Error: ' + (data.error || 'Failed to process payment.'));
+                btn.disabled = false;
+                btn.textContent = '✅ Confirm & Complete';
+            }
+        })
+        .catch(err => {
+            console.error(err);
+            alert('Network error. Please try again.');
+            btn.disabled = false;
+            btn.textContent = '✅ Confirm & Complete';
+        });
+    });
+
+    document.getElementById('paymentModal').addEventListener('hidden.bs.modal', function() {
+        const btn = document.getElementById('confirmPaymentBtn');
+        btn.disabled = false;
+        btn.textContent = '✅ Confirm & Complete';
+    });
+
+        document.getElementById('sendBackBtn').addEventListener('click', function() {
+        if (!retailVisitId) {
+            alert('Error: Visit ID is missing. Please add items and try again.');
+            return;
+        }
+
+        const reason = prompt('Send this sale back to the cart for editing. What needs fixing? (optional)');
+        if (reason === null) return;
+
+        if (!confirm('Send this sale back to the cart? It will not be charged now -- you can edit the items and finalize it again afterwards.')) {
+            return;
+        }
+
+        const btn = this;
+        btn.disabled = true;
+        btn.textContent = 'Sending...';
+
+        fetch('/api/cashier/send_back/' + retailVisitId, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reason: reason.trim() })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                document.getElementById('paymentModal').querySelector('.btn-close').click();
+
+                // --- NEW INSTANT RENDER LOGIC ---
+                const flashContainer = document.getElementById('cmFlashContainer');
+                if (reason && reason.trim() !== '') {
+                    // 1. Save it to sessionStorage (so it shows on refresh too)
+                    CMShell.flash(`↩ Sale returned to cart. Reason: "${reason.trim()}"`, 'warning');
+
+                    // 2. Manually render it NOW (so it shows instantly without refresh)
+                    flashContainer.innerHTML = `
+                        <div class="alert alert-warning alert-dismissible fade show" role="alert">
+                            ↩ Sale returned to cart. Reason: "${reason.trim()}"
+                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                        </div>
+                    `;
+                } else {
+                    // Clear it if no reason
+                    flashContainer.innerHTML = '';
+                }
+                // ------------------------------------
+
+                // Restore cart from returned items
+                cart.length = 0;
+                data.items.forEach(item => {
+                    const catalogMatch = allItems.find(i => parseInt(i.id, 10) === parseInt(item.price_list_id, 10));
+                    cart.push({
+                        price_list_id: item.price_list_id,
+                        name: item.name,
+                        type: item.type,
+                        price: catalogMatch ? catalogMatch.price : Math.round(item.price_per_unit),
+                        packQty: catalogMatch ? catalogMatch.packQty : 1,
+                        usableQty: catalogMatch ? catalogMatch.usableQty : 999,
+                        noStockConcept: catalogMatch ? catalogMatch.noStockConcept : true,
+                        qty: item.qty
+                    });
+                });
+                renderCart();
+                retailVisitId = null;
+                loadPendingRetail();
+            } else {
+                alert('Error: ' + (data.error || 'Could not send this sale back.'));
+            }
+            btn.disabled = false;
+            btn.textContent = '↩ Send Back';
+        })
+        .catch(err => {
+            console.error(err);
+            alert('Network error. Please try again.');
+            btn.disabled = false;
+            btn.textContent = '↩ Send Back';
+        });
+    });
+
+    function loadPendingRetail() {
+        fetch('/api/retail/pending')
+            .then(res => res.json())
+            .then(data => {
+                const card = document.getElementById('pendingRetailCard');
+                const body = document.getElementById('pendingRetailBody');
+
+                if (!data.success || data.pending.length === 0) {
+                    card.style.display = 'none';
+                    return;
+                }
+
+                card.style.display = 'block';
+                body.innerHTML = '';
+
+                data.pending.forEach(draft => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td><small>${new Date(draft.created_at).toLocaleString()}</small></td>
+                        <td class="text-end">MK ${(draft.total_fee / 100).toFixed(2)}</td>
+                        <td class="text-end">
+                            <button class="btn btn-outline-primary btn-sm resume-draft-btn" data-id="${draft.visit_id}" data-total="${draft.total_fee}">▶ Resume</button>
+                            <button class="btn btn-outline-danger btn-sm cancel-draft-btn ms-1" data-id="${draft.visit_id}">✕ Cancel</button>
+                        </td>
+                    `;
+                    body.appendChild(tr);
+                });
+
+                wireDraftButtons();
+            })
+            .catch(err => console.error('Could not load pending retail sales:', err));
+    }
+
+    function wireDraftButtons() {
+        document.querySelectorAll('.resume-draft-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                resumeDraft(
+                    this.getAttribute('data-id'),
+                    parseInt(this.getAttribute('data-total'))
+                );
+            });
+        });
+
+        document.querySelectorAll('.cancel-draft-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const visitId = this.getAttribute('data-id');
+                if (!confirm('Cancel this unpaid retail sale? This cannot be undone.')) return;
+
+                fetch('/api/retail/cancel/' + visitId, { method: 'POST' })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.success) {
+                            loadPendingRetail();
+                        } else {
+                            alert('Error: ' + data.error);
+                        }
+                    })
+                    .catch(err => {
+                        console.error(err);
+                        alert('Network error. Please try again.');
+                    });
+            });
+        });
+    }
+
+    function resumeDraft(visitId, totalFee) {
+        retailVisitId = visitId;
+        retailTotal = totalFee;
+
+        document.getElementById('modalPatientName').textContent = '🏪 Retail Sale';
+        document.getElementById('modalTotalFee').textContent = 'MK ' + (totalFee / 100).toFixed(2);
+        document.getElementById('fullAmountDisplay').textContent = 'MK ' + (totalFee / 100).toFixed(2);
+
+        document.getElementById('discountAmount').value = '';
+        document.getElementById('discountReason').value = '';
+        document.getElementById('loanAmount').value = '';
+        document.getElementById('loanWitness').value = '';
+        document.getElementById('loanDueDate').value = '';
+        document.getElementById('paymentReference').value = '';
+        document.getElementById('paymentChannel').value = 'Cash';
+        document.getElementById('medicalAidCompany').value = '';
+        document.getElementById('medicalAidFields').style.display = 'none';
+        document.getElementById('refFieldWrapper').style.display = 'none';
+        document.getElementById('roundingSelect').value = '0';
+        updateRoundedTotalDisplay();
+
+        document.getElementById('payFull').checked = true;
+        togglePaymentMode('full');
+
+        document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-muted">Loading items...</td></tr>';
+        const paymentModal = new bootstrap.Modal(document.getElementById('paymentModal'));
+        paymentModal.show();
+
+        fetch('/api/cashier/view/' + visitId)
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    document.getElementById('invoiceItemsBody').innerHTML = `<tr><td colspan="5" class="text-center text-danger">${data.error}</td></tr>`;
+                    return;
+                }
+                let html = '';
+                data.items.forEach(item => {
+                    html += `
+                        <tr>
+                            <td><span class="badge bg-info text-dark">${item.type}</span></td>
+                            <td><strong>${item.name}</strong></td>
+                            <td class="text-end">MK ${(item.unit_price / 100).toFixed(2)}</td>
+                            <td class="text-end">${item.qty}</td>
+                            <td class="text-end">MK ${(item.total / 100).toFixed(2)}</td>
+                        </tr>
+                    `;
+                });
+                document.getElementById('invoiceItemsBody').innerHTML = html;
+                document.getElementById('invTotal').textContent = 'MK ' + (retailTotal / 100).toFixed(2);
+            })
+            .catch(err => {
+                console.error(err);
+                document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-danger">Network error loading items.</td></tr>';
+            });
+    }
+
+    function loadStaffList() {
+        fetch('/api/staff/list')
+            .then(res => res.json())
+            .then(data => {
+                const select = document.getElementById('loanWitness');
+                select.innerHTML = '<option value="">-- Select a staff member --</option>';
+                data.staff.forEach(s => {
+                    const opt = document.createElement('option');
+                    opt.value = s.id;
+                    opt.textContent = s.name;
+                    select.appendChild(opt);
+                });
+            });
+    }
+
+    function cmEscapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str || '';
+        return div.innerHTML;
+    }
+    </script>
+</body>
+</html>

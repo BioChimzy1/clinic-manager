@@ -12,6 +12,17 @@ ROLES = {
 }
 
 PERMISSIONS = {
+    "clinic.view": {"admin", "doctor", "pharmacist", "cashier", "receptionist", "nurse", "guard", "ground_worker"},
+
+    # Dashboard
+    # FLAG FOR REVIEW: this key was missing entirely, which meant
+    # has_permission() fell through to PERMISSIONS.get(..., set()) and
+    # /api/dashboard 403'd for every role, including admin. Set to
+    # match clinic.view (all roles) since the dashboard is the shared
+    # landing page after login -- narrow this down deliberately if you
+    # want it more restricted.
+    "dashboard.view": {"admin", "doctor", "pharmacist", "cashier", "receptionist", "nurse", "guard", "ground_worker"},
+
     # Queue & Flow
     "queue.view": {"admin", "doctor", "pharmacist", "cashier", "receptionist", "nurse", "guard"},
     "queue.register_patient": {"admin", "doctor", "receptionist"},

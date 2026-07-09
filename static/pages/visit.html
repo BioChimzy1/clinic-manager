@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Open Visit — ClinicManager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#0A3530">
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+    <main>
+        <div class="container">
+            <div class="app-container">
+                <div id="cmFlashContainer"></div>
+                
+                <div class="row">
+                    <div class="col-12">
+                        <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
+                            <div>
+                                <h3 class="mb-0">📋 Open Visit</h3>
+                                <small class="text-muted" id="patientInfo">Loading...</small>
+                            </div>
+                            <a href="/queue" class="btn btn-secondary btn-sm">← Back to Queue</a>
+                        </div>
+
+                        <div id="returnBanner" class="alert alert-warning" style="display: none;">
+                            ↩ Returned by cashier: <span id="returnReason"></span>
+                        </div>
+
+                        <form id="visitForm">
+                            <!-- Diagnosis -->
+                            <div class="mb-4">
+                                <label class="form-label fw-bold">Diagnosis <span class="text-danger">*</span></label>
+                                <textarea name="diagnosis" class="form-control" rows="3" placeholder="e.g. Malaria, uncomplicated" required id="diagnosisInput"></textarea>
+                            </div>
+
+                            <!-- Item search + add -->
+                            <div class="mb-3" style="position: relative;">
+                                <label class="form-label fw-bold">Add Item (Consultation, Drug, Test, or Procedure)</label>
+                                <input type="text" id="itemSearchInput" class="form-control" placeholder="Type to search price list..." autocomplete="off">
+                                <div id="searchResults" class="bg-white border rounded shadow-sm" style="display: none; position: absolute; width: 100%; max-height: 260px; overflow-y: auto; z-index: 1050; top: 100%; left: 0; margin-top: 2px;"></div>
+                            </div>
+
+                            <!-- Selected items table -->
+                            <div class="table-responsive mb-3">
+                                <table class="table table-striped align-middle" id="selectedItemsTable">
+                                    <thead class="table-dark">
+                                        <tr>
+                                            <th>Type</th>
+                                            <th>Item</th>
+                                            <th class="text-end">Pack Price (MK)</th>
+                                            <th style="width: 130px;">Qty</th>
+                                            <th class="text-end">Line Total</th>
+                                            <th></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="selectedItemsBody">
+                                        <tr id="emptyRow">
+                                            <td colspan="6" class="text-center text-muted py-4">No items added yet. Search above to add a consultation, drug, test, or procedure.</td>
+                                        </tr>
+                                    </tbody>
+                                    <tfoot>
+                                        <tr>
+                                            <th colspan="4" class="text-end">Total</th>
+                                            <th class="text-end" id="grandTotal">MK 0.00</th>
+                                            <th></th>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            </div>
+
+                            <div class="d-flex justify-content-end gap-2">
+                                <a href="/queue" class="btn btn-secondary">Cancel</a>
+                                <button type="submit" class="btn btn-success px-4" id="saveVisitBtn">💾 Save Visit &amp; Send to Cashier</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/static/js/shell.js"></script>
+    <script>
+    // Get patient_id from URL path
+    const urlParams = new URLSearchParams(window.location.search);
+const patientId = urlParams.get('patient_id');
+
+if (!patientId) {
+    alert('No patient ID provided. Go back to the queue.');
+    window.location.href = '/queue';
+}
+
+    let allItems = [];
+    let selected = new Map();
+    let prefillItems = [];
+    let prefillDiagnosis = null;
+    let prefillReturnReason = null;
+
+    document.addEventListener('DOMContentLoaded', async function () {
+        const { authenticated } = await CMShell.init({ active: 'visit' });
+        if (!authenticated) return;
+
+        await loadVisitPrefill(patientId);
+
+        const searchInput = document.getElementById('itemSearchInput');
+        const searchResults = document.getElementById('searchResults');
+
+        // Autocomplete
+        searchInput.addEventListener('input', function() {
+            const query = this.value.trim().toLowerCase();
+            if (query.length === 0) {
+                searchResults.style.display = 'none';
+                searchResults.innerHTML = '';
+                return;
+            }
+
+            const matches = allItems.filter(item => item.name.toLowerCase().includes(query));
+            searchResults.innerHTML = '';
+
+            if (matches.length === 0) {
+                searchResults.innerHTML = '<div class="p-3 text-muted small">No matches found.</div>';
+                searchResults.style.display = 'block';
+                return;
+            }
+
+            matches.forEach(item => {
+                const selectable = isSelectable(item);
+                const div = document.createElement('div');
+                div.className = 'p-2 border-bottom' + (selectable ? ' bg-white' : ' bg-light text-muted');
+                div.style.cursor = selectable ? 'pointer' : 'not-allowed';
+
+                let statusBadge = '';
+                let qtyLabel = '';
+                if (!item.noStockConcept) {
+                    qtyLabel = ` <strong>${item.usableQty}</strong> in stock`;
+                    if (item.usableQty > 0 && item.expiredQty === 0) {
+                        statusBadge = '<span class="badge bg-success ms-1">✅ Available</span>';
+                    } else if (item.usableQty > 0 && item.expiredQty > 0) {
+                        statusBadge = '<span class="badge bg-success ms-1">✅ Available</span><span class="badge bg-warning text-dark ms-1">⚠️ Some expired</span>';
+                    } else if (item.usableQty === 0 && item.expiredQty > 0) {
+                        statusBadge = '<span class="badge ms-1" style="background-color:#6f0000;color:#fff;">⛔ Expired - cannot select</span>';
+                    } else {
+                        statusBadge = '<span class="badge bg-secondary ms-1">🚫 Out of stock</span>';
+                    }
+                }
+
+                div.innerHTML = `<strong>${cmEscapeHtml(item.name)}</strong> <small class="text-muted">(${item.type}, MK ${(item.price / 100).toFixed(2)} per pack of ${item.defaultQuantity}${qtyLabel})</small> ${statusBadge}`;
+
+                if (selectable) {
+                    div.addEventListener('click', () => addItem(item));
+                }
+
+                searchResults.appendChild(div);
+            });
+
+            searchResults.style.display = 'block';
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!searchResults.contains(e.target) && e.target !== searchInput) {
+                searchResults.style.display = 'none';
+                searchResults.innerHTML = '';
+            }
+        });
+
+        // Form submit
+        document.getElementById('visitForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            if (selected.size === 0) {
+                alert('Add at least one item (consultation, drug, test, or procedure) before saving.');
+                return;
+            }
+
+            const diagnosis = document.getElementById('diagnosisInput').value.trim();
+            if (!diagnosis) {
+                alert('Diagnosis is required.');
+                return;
+            }
+
+            const items = [];
+            selected.forEach((entry, id) => {
+                items.push({ price_list_id: parseInt(id), qty: entry.qty });
+            });
+
+            const btn = document.getElementById('saveVisitBtn');
+            btn.disabled = true;
+            btn.textContent = 'Saving...';
+
+            try {
+                const res = await fetch('/api/visit/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ patient_id: patientId, diagnosis: diagnosis, items: items })
+                });
+                const result = await res.json();
+                if (result.success) {
+                    window.location.href = '/queue';
+                } else {
+                    alert('Error: ' + (result.error || 'Could not save visit'));
+                    btn.disabled = false;
+                    btn.textContent = '💾 Save Visit & Send to Cashier';
+                }
+            } catch (err) {
+                alert('Network error. Please try again.');
+                btn.disabled = false;
+                btn.textContent = '💾 Save Visit & Send to Cashier';
+            }
+        });
+    });
+
+    async function loadVisitPrefill(id) {
+        try {
+            const res = await fetch('/api/visit/prefill/' + id);
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+            renderPrefill(data);
+        } catch (err) {
+            console.error('Failed to load visit prefill:', err);
+        }
+    }
+
+    function renderPrefill(data) {
+        document.getElementById('patientInfo').textContent = 
+            `${data.patient_name} · ${data.patient_sex || ''} · DOB ${data.patient_dob || ''} · ${data.appointment_type === 'Appointment' ? '📅 Appointment' : '🚶 Walk-In'}`;
+
+        allItems = data.priced_items || [];
+        prefillItems = data.prefill_items || [];
+        prefillDiagnosis = data.prefill_diagnosis;
+        prefillReturnReason = data.prefill_return_reason;
+
+        // Show return banner if applicable
+        if (prefillReturnReason) {
+            document.getElementById('returnBanner').style.display = 'block';
+            document.getElementById('returnReason').textContent = prefillReturnReason;
+        }
+
+        // Pre-fill diagnosis
+        if (prefillDiagnosis) {
+            document.getElementById('diagnosisInput').value = prefillDiagnosis;
+        }
+
+        // Pre-fill items
+        prefillItems.forEach(entry => {
+            const item = allItems.find(i => i.id === entry.id);
+            if (item) {
+                selected.set(item.id, { item: item, qty: entry.qty });
+            }
+        });
+
+        if (selected.size > 0) {
+            renderSelectedTable();
+        }
+    }
+
+    function isSelectable(item) {
+        if (item.noStockConcept) return true;
+        return item.usableQty > 0;
+    }
+
+    function calculateLineTotal(item, qty) {
+        const packQuantity = (item.defaultQuantity && item.defaultQuantity > 0) ? item.defaultQuantity : 1;
+        const pricePerUnit = item.price / packQuantity;
+        return Math.round(pricePerUnit * qty);
+    }
+
+    function addItem(item) {
+        if (!isSelectable(item)) return;
+        if (selected.has(item.id)) {
+            selected.get(item.id).qty += 1;
+        } else {
+            const startingQty = (item.defaultQuantity && item.defaultQuantity >= 1) ? item.defaultQuantity : 1;
+            selected.set(item.id, { item: item, qty: startingQty });
+        }
+        renderSelectedTable();
+        document.getElementById('itemSearchInput').value = '';
+        document.getElementById('searchResults').style.display = 'none';
+        document.getElementById('searchResults').innerHTML = '';
+        document.getElementById('itemSearchInput').focus();
+    }
+
+    function renderSelectedTable() {
+        const tbody = document.getElementById('selectedItemsBody');
+        const emptyRow = document.getElementById('emptyRow');
+        const grandTotalEl = document.getElementById('grandTotal');
+
+        tbody.innerHTML = '';
+
+        if (selected.size === 0) {
+            tbody.appendChild(emptyRow);
+            grandTotalEl.textContent = 'MK 0.00';
+            return;
+        }
+
+        let grandTotal = 0;
+
+        selected.forEach((entry, id) => {
+            const { item, qty } = entry;
+            const lineTotal = calculateLineTotal(item, qty);
+            grandTotal += lineTotal;
+
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><span class="badge bg-info text-dark">${item.type}</span></td>
+                <td><strong>${item.name}</strong>
+                    <input type="hidden" name="selected_items" value="${id}">
+                </td>
+                <td class="text-end">MK ${(item.price / 100).toFixed(2)} <small class="text-muted">/${item.defaultQuantity}</small></td>
+                <td>
+                    <input type="number" class="form-control qty-input" value="${qty}" data-id="${id}" min="1" style="font-size: 1.1rem; padding: 0.5rem; min-width: 100px;">
+                </td>
+                <td class="text-end line-total">MK ${(lineTotal / 100).toFixed(2)}</td>
+                <td class="text-end">
+                    <button type="button" class="btn btn-outline-danger btn-sm remove-item-btn" data-id="${id}">✕</button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+
+        grandTotalEl.textContent = 'MK ' + (grandTotal / 100).toFixed(2);
+
+        // Wire up qty changes
+        tbody.querySelectorAll('.qty-input').forEach(input => {
+            input.addEventListener('input', function() {
+                const id = this.dataset.id;
+                const entry = selected.get(id);
+                if (!entry) return;
+
+                const raw = parseInt(this.value, 10);
+                const row = this.closest('tr');
+
+                if (!isNaN(raw) && raw >= 1) {
+                    entry.qty = raw;
+                    const lineTotal = calculateLineTotal(entry.item, entry.qty);
+                    row.querySelector('.line-total').textContent = 'MK ' + (lineTotal / 100).toFixed(2);
+                    updateGrandTotal();
+                }
+            });
+
+            input.addEventListener('blur', function() {
+                const id = this.dataset.id;
+                const entry = selected.get(id);
+                if (!entry) return;
+
+                let qty = parseInt(this.value, 10);
+                if (isNaN(qty) || qty < 1) qty = 1;
+                entry.qty = qty;
+                renderSelectedTable();
+            });
+        });
+
+        // Remove buttons
+        tbody.querySelectorAll('.remove-item-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const id = this.dataset.id;
+                selected.delete(id);
+                renderSelectedTable();
+            });
+        });
+    }
+
+    function updateGrandTotal() {
+        let grandTotal = 0;
+        selected.forEach((entry) => {
+            grandTotal += calculateLineTotal(entry.item, entry.qty);
+        });
+        document.getElementById('grandTotal').textContent = 'MK ' + (grandTotal / 100).toFixed(2);
+    }
+
+    function cmEscapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str || '';
+        return div.innerHTML;
+    }
+    </script>
+</body>
+</html>

@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 clinic_backup_*.db
 *.db
+*.db.bak.*
+changes.txt
+full_changes_summary.txt
+final_working_backup.sql

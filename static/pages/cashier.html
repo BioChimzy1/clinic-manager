@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cashier — ClinicManager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#0A3530">
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+    <main>
+        <div class="container">
+            <div class="app-container">
+                <div id="cmFlashContainer"></div>
+                
+                <div class="row">
+                    <div class="col-12">
+                        <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
+                            <h3 class="mb-0">💰 Cashier</h3>
+                            <span class="badge bg-dark fs-6" id="cashierCountBadge">Loading...</span>
+                        </div>
+
+                        <div class="mb-3">
+                            <input type="text" id="cashierSearchInput" class="form-control" placeholder="🔍 Search by patient name..." autocomplete="off">
+                        </div>
+
+                        <div id="noResultsMsg" class="text-center text-muted py-4" style="display: none;">
+                            No patients match your search.
+                        </div>
+
+                        <div class="table-responsive">
+                            <table class="table table-striped table-hover align-middle">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th>Patient</th>
+                                        <th>Diagnosis</th>
+                                        <th class="text-end">Total (MK)</th>
+                                        <th class="text-end">Paid (MK)</th>
+                                        <th class="text-end">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="cashierTableBody">
+                                    <tr id="emptyRow">
+                                        <td colspan="5" class="text-center text-muted py-4">Loading cashier queue...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Payment Modal -->
+    <div class="modal fade" id="paymentModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header bg-dark text-white">
+                    <h5 class="modal-title">💳 Process Payment</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="modalPatientInfo" class="mb-3">
+                        <h6 id="modalPatientName" class="mb-0"></h6>
+                        <small class="text-muted">Total: <span id="modalTotalFee">MK 0.00</span></small>
+                    </div>
+
+                    <!-- Invoice Items Table -->
+                    <div class="table-responsive mb-3">
+                        <table class="table table-sm table-bordered">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Type</th>
+                                    <th>Item</th>
+                                    <th class="text-end">Unit Price</th>
+                                    <th class="text-end">Qty</th>
+                                    <th class="text-end">Total</th>
+                                </tr>
+                            </thead>
+                            <tbody id="invoiceItemsBody">
+                                <tr><td colspan="5" class="text-center text-muted">Loading items...</td></tr>
+                            </tbody>
+                            <tfoot>
+                                <tr>
+                                    <th colspan="4" class="text-end">Grand Total</th>
+                                    <th class="text-end" id="invTotal">MK 0.00</th>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+
+                    <hr>
+
+                    <!-- ROUNDING -->
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Round Total To Nearest (MK)</label>
+                            <select id="roundingSelect" class="form-select">
+                                <option value="0" selected>No rounding</option>
+                                <option value="100">100</option>
+                                <option value="200">200</option>
+                                <option value="300">300</option>
+                                <option value="400">400</option>
+                                <option value="500">500</option>
+                                <option value="600">600</option>
+                                <option value="700">700</option>
+                                <option value="800">800</option>
+                                <option value="900">900</option>
+                                <option value="1000">1000</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Rounded Total</label>
+                            <input type="text" id="roundedTotalDisplay" class="form-control" value="MK 0.00" readonly>
+                        </div>
+                    </div>
+
+                    <hr>
+
+                    <!-- DISCOUNT -->
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Discount Amount (MK)</label>
+                            <div class="input-group">
+                                <input type="number" step="0.01" id="discountAmount" class="form-control" placeholder="0.00" min="0">
+                                <button class="btn btn-outline-danger" type="button" id="clearDiscountBtn">✕</button>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Discount Reason <span class="text-danger">*</span></label>
+                            <input type="text" id="discountReason" class="form-control" placeholder="e.g. Staff discount">
+                        </div>
+                    </div>
+
+                    <hr>
+
+                    <!-- PAYMENT MODE -->
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">How much is the patient paying <strong>now</strong>?</label>
+                        <div class="btn-group w-100 mb-2" role="group">
+                            <input type="radio" class="btn-check" name="payMode" id="payFull" value="full" checked>
+                            <label class="btn btn-outline-success" for="payFull">💰 Pay Full Amount</label>
+
+                            <input type="radio" class="btn-check" name="payMode" id="payPartial" value="partial">
+                            <label class="btn btn-outline-warning" for="payPartial">💳 Pay Partial / Loan</label>
+                        </div>
+                    </div>
+
+                    <!-- Full Payment Info -->
+                    <div id="fullPaymentInfo" class="alert alert-success">
+                        <p class="mb-0">The patient will pay the full remaining amount: <strong id="fullAmountDisplay">MK 0.00</strong></p>
+                    </div>
+
+                    <!-- Partial Payment / Loan Fields -->
+                    <div id="partialPaymentFields" style="display: none;">
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Amount Paid Now (MK) <span class="text-danger">*</span></label>
+                            <input type="number" step="0.01" id="loanAmount" class="form-control" placeholder="e.g. 1500.00" min="0">
+                            <small class="text-muted">Remaining balance: <span id="loanRemainingDisplay">MK 0.00</span></small>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Witness <span class="text-danger">*</span></label>
+                            <select id="loanWitness" class="form-select">
+                                <option value="">-- Select a staff member --</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Due Date (Optional)</label>
+                            <input type="date" id="loanDueDate" class="form-control">
+                        </div>
+                    </div>
+
+                    <hr>
+
+                    <!-- Payment Channel -->
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Payment Channel</label>
+                            <select id="paymentChannel" class="form-select">
+                                <option value="Cash">Cash</option>
+                                <option value="Airtel Money">Airtel Money</option>
+                                <option value="TNM Mpamba">TNM Mpamba</option>
+                                <option value="Bank Transfer">Bank Transfer</option>
+                                <option value="Cheque">Cheque</option>
+                                <option value="Medical Aid">Medical Aid</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6" id="refFieldWrapper" style="display: none;">
+                            <label class="form-label fw-bold" id="refLabel">Reference / Phone Number</label>
+                            <input type="text" id="paymentReference" class="form-control" placeholder="Enter account/phone number">
+                        </div>
+                    </div>
+
+                    <!-- Medical Aid Field -->
+                    <div id="medicalAidFields" style="display: none;" class="row mb-3">
+                        <div class="col-md-12">
+                            <label class="form-label fw-bold">Medical Aid Company</label>
+                            <input type="text" id="medicalAidCompany" class="form-control" placeholder="e.g. MASM, NICO">
+                        </div>
+                    </div>
+
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-outline-warning" id="sendBackBtn">↩ Send Back</button>
+                    <button type="button" class="btn btn-success" id="confirmPaymentBtn">✅ Confirm & Complete</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/shell.js"></script>
+    <script src="/static/js/outbox.js"></script>
+    <script>
+    document.addEventListener('DOMContentLoaded', async function () {
+        const { authenticated } = await CMShell.init({ active: 'cashier' });
+        if (!authenticated) return;
+
+        loadCashierList();
+        loadStaffList();
+    });
+
+    let currentVisitId = null;
+    let currentTotal = 0;
+    let currentPaid = 0;
+    let currentPatientName = '';
+
+    async function loadCashierList() {
+        try {
+            const res = await fetch('/api/cashier/list');
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+            renderCashierList(data);
+        } catch (err) {
+            document.getElementById('cashierTableBody').innerHTML =
+                '<tr><td colspan="5" class="text-center text-muted py-4">Unable to load cashier queue. Check your connection.</td></tr>';
+        }
+    }
+
+    function renderCashierList(data) {
+        const list = data.cashier_list || [];
+        const tbody = document.getElementById('cashierTableBody');
+        const countBadge = document.getElementById('cashierCountBadge');
+
+        countBadge.textContent = `${list.length} ${list.length === 1 ? 'patient' : 'patients'} awaiting payment`;
+
+        if (list.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">No patients awaiting cashier.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = list.map(visit => `
+            <tr data-name="${cmEscapeHtml(visit.patient_name.toLowerCase())}">
+                <td><strong>${cmEscapeHtml(visit.patient_name)}</strong></td>
+                <td><small class="text-muted">${cmEscapeHtml(visit.diagnosis)}</small></td>
+                <td class="text-end">${(visit.total_fee / 100).toFixed(2)}</td>
+                <td class="text-end">${(visit.amount_paid / 100).toFixed(2)}</td>
+                <td class="text-end">
+                    <button class="btn btn-primary btn-sm process-payment-btn"
+                            data-id="${visit.id}"
+                            data-total="${visit.total_fee}"
+                            data-paid="${visit.amount_paid}"
+                            data-patient="${cmEscapeHtml(visit.patient_name)}">
+                        💳 Process
+                    </button>
+                </td>
+            </tr>
+        `).join('');
+
+        attachPaymentHandlers();
+        applySearch(document.getElementById('cashierSearchInput').value.trim().toLowerCase());
+    }
+
+    function applySearch(query) {
+        const rows = document.querySelectorAll('#cashierTableBody tr[data-name]');
+        const noResultsMsg = document.getElementById('noResultsMsg');
+        let visibleCount = 0;
+
+        rows.forEach((row) => {
+            const matches = row.getAttribute('data-name').includes(query);
+            row.style.display = matches ? '' : 'none';
+            if (matches) visibleCount++;
+        });
+
+        noResultsMsg.style.display = (visibleCount === 0 && query.length > 0) ? 'block' : 'none';
+    }
+
+    function attachPaymentHandlers() {
+        const paymentModal = new bootstrap.Modal(document.getElementById('paymentModal'));
+
+        document.querySelectorAll('.process-payment-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                currentVisitId = this.dataset.id;
+                currentTotal = parseInt(this.dataset.total);
+                currentPaid = parseInt(this.dataset.paid);
+                currentPatientName = this.dataset.patient;
+
+                document.getElementById('modalPatientName').textContent = currentPatientName;
+                document.getElementById('modalTotalFee').textContent = 'MK ' + (currentTotal / 100).toFixed(2);
+                document.getElementById('fullAmountDisplay').textContent = 'MK ' + (currentTotal / 100).toFixed(2);
+
+                // Reset form
+                document.getElementById('discountAmount').value = '';
+                document.getElementById('discountReason').value = '';
+                document.getElementById('loanAmount').value = '';
+                document.getElementById('loanWitness').value = '';
+                document.getElementById('loanDueDate').value = '';
+                document.getElementById('paymentReference').value = '';
+                document.getElementById('paymentChannel').value = 'Cash';
+                document.getElementById('medicalAidCompany').value = '';
+                document.getElementById('medicalAidFields').style.display = 'none';
+                document.getElementById('refFieldWrapper').style.display = 'none';
+                document.getElementById('roundingSelect').value = '0';
+                updateRoundedTotalDisplay();
+
+                document.getElementById('payFull').checked = true;
+                togglePaymentMode('full');
+
+                // Load Invoice Items
+                document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-muted">Loading items...</td></tr>';
+                paymentModal.show();
+
+                fetch('/api/cashier/view/' + currentVisitId)
+                    .then(res => res.json())
+                    .then(data => {
+                        let html = '';
+                        data.items.forEach(item => {
+                            html += `
+                                <tr>
+                                    <td><span class="badge bg-info text-dark">${item.type}</span></td>
+                                    <td><strong>${item.name}</strong></td>
+                                    <td class="text-end">MK ${(item.unit_price / 100).toFixed(2)}</td>
+                                    <td class="text-end">${item.qty}</td>
+                                    <td class="text-end">MK ${(item.total / 100).toFixed(2)}</td>
+                                </tr>
+                            `;
+                        });
+                        document.getElementById('invoiceItemsBody').innerHTML = html;
+                        document.getElementById('invTotal').textContent = 'MK ' + (data.total / 100).toFixed(2);
+                    })
+                    .catch(() => {
+                        document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-danger">Error loading invoice.</td></tr>';
+                    });
+            });
+        });
+
+        // Search functionality
+        const searchInput = document.getElementById('cashierSearchInput');
+        searchInput.addEventListener('input', function() {
+            applySearch(this.value.trim().toLowerCase());
+        });
+    }
+
+    function loadStaffList() {
+        fetch('/api/staff/list')
+            .then(res => res.json())
+            .then(data => {
+                const select = document.getElementById('loanWitness');
+                select.innerHTML = '<option value="">-- Select a staff member --</option>';
+                data.staff.forEach(s => {
+                    const opt = document.createElement('option');
+                    opt.value = s.id;
+                    opt.textContent = s.name;
+                    select.appendChild(opt);
+                });
+            });
+    }
+
+    // Payment Modal Logic
+    function getRoundedBaseTotal() {
+        const roundTo = parseInt(document.getElementById('roundingSelect').value, 10) || 0;
+        if (roundTo <= 0) return currentTotal;
+        const roundToTambala = roundTo * 100;
+        return Math.round(currentTotal / roundToTambala) * roundToTambala;
+    }
+
+    function updateRoundedTotalDisplay() {
+        const rounded = getRoundedBaseTotal();
+        document.getElementById('roundedTotalDisplay').value = 'MK ' + (rounded / 100).toFixed(2);
+        document.getElementById('modalTotalFee').textContent = 'MK ' + (rounded / 100).toFixed(2);
+        document.getElementById('fullAmountDisplay').textContent = 'MK ' + (getFinalTotal() / 100).toFixed(2);
+        updateLoanRemaining();
+    }
+
+    document.getElementById('roundingSelect').addEventListener('change', updateRoundedTotalDisplay);
+
+    function togglePaymentMode(mode) {
+        document.getElementById('fullPaymentInfo').style.display = mode === 'full' ? 'block' : 'none';
+        document.getElementById('partialPaymentFields').style.display = mode === 'partial' ? 'block' : 'none';
+    }
+
+    document.querySelectorAll('input[name="payMode"]').forEach(radio => {
+        radio.addEventListener('change', function() {
+            togglePaymentMode(this.value);
+        });
+    });
+
+    document.getElementById('discountAmount').addEventListener('input', function() {
+        document.getElementById('fullAmountDisplay').textContent = 'MK ' + (getFinalTotal() / 100).toFixed(2);
+        updateLoanRemaining();
+    });
+
+    function updateLoanRemaining() {
+        const paid = parseFloat(document.getElementById('loanAmount').value) || 0;
+        const remaining = Math.max(0, getFinalTotal() / 100 - paid);
+        document.getElementById('loanRemainingDisplay').textContent = 'MK ' + remaining.toFixed(2);
+    }
+
+    document.getElementById('paymentChannel').addEventListener('change', function() {
+        const val = this.value;
+        const refLabel = document.getElementById('refLabel');
+        const refInput = document.getElementById('paymentReference');
+        const refWrapper = document.getElementById('refFieldWrapper');
+        const medAidFields = document.getElementById('medicalAidFields');
+
+        if (val === 'Airtel Money' || val === 'TNM Mpamba') {
+            refWrapper.style.display = 'block';
+            refLabel.textContent = 'Phone Number / Agent Code';
+            refInput.placeholder = 'e.g. 0991234567';
+            medAidFields.style.display = 'none';
+        } else if (val === 'Bank Transfer') {
+            refWrapper.style.display = 'block';
+            refLabel.textContent = 'Account Number';
+            refInput.placeholder = 'e.g. 1234567890';
+            medAidFields.style.display = 'none';
+        } else if (val === 'Cheque') {
+            refWrapper.style.display = 'block';
+            refLabel.textContent = 'Cheque Number';
+            refInput.placeholder = 'e.g. 001234';
+            medAidFields.style.display = 'none';
+        } else if (val === 'Medical Aid') {
+            refWrapper.style.display = 'none';
+            refInput.value = '';
+            medAidFields.style.display = 'block';
+        } else {
+            refWrapper.style.display = 'none';
+            refInput.value = '';
+            medAidFields.style.display = 'none';
+        }
+    });
+
+    function getFinalTotal() {
+        const discountAmt = parseFloat(document.getElementById('discountAmount').value) * 100 || 0;
+        return Math.max(0, getRoundedBaseTotal() - discountAmt);
+    }
+
+    document.getElementById('confirmPaymentBtn').addEventListener('click', function() {
+        const isFull = document.querySelector('input[name="payMode"]:checked').value === 'full';
+        const finalTotal = getFinalTotal();
+
+        const discountAmt = parseFloat(document.getElementById('discountAmount').value) * 100 || 0;
+        const discountReason = document.getElementById('discountReason').value.trim();
+
+        if (discountAmt > 0 && !discountReason) {
+            alert('Please enter a reason for the discount.');
+            return;
+        }
+
+        const roundTo = parseInt(document.getElementById('roundingSelect').value, 10) || 0;
+
+        const payload = {
+            payment_mode: isFull ? 'full' : 'loan',
+            payment_channel: document.getElementById('paymentChannel').value,
+            payment_reference: document.getElementById('paymentReference').value.trim() || null,
+            medical_aid_company: document.getElementById('medicalAidCompany').value.trim() || null,
+            discount_amount: discountAmt,
+            discount_reason: discountReason || null,
+            round_to: roundTo || null,
+            rounded_total: roundTo ? getRoundedBaseTotal() : null
+        };
+
+        if (isFull) {
+            payload.amount_paid = finalTotal;
+        } else {
+            const amountPaid = parseFloat(document.getElementById('loanAmount').value) * 100 || 0;
+            const witness = document.getElementById('loanWitness').value;
+            const dueDate = document.getElementById('loanDueDate').value;
+
+            if (!amountPaid || amountPaid <= 0) {
+                alert('Please enter a valid payment amount for the loan.');
+                return;
+            }
+            if (amountPaid >= finalTotal) {
+                alert('If paying the full amount, please select "Pay Full Amount" instead.');
+                return;
+            }
+            if (!witness) {
+                alert('Witness is required for partial payments/loans.');
+                return;
+            }
+            payload.amount_paid = amountPaid;
+            payload.witness_id = witness;
+            payload.loan_due_date = dueDate || null;
+        }
+
+        const btn = this;
+        btn.disabled = true;
+        btn.textContent = 'Processing...';
+
+        fetch('/api/cashier/process/' + currentVisitId, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                document.getElementById('paymentModal').querySelector('.btn-close').click();
+                location.reload();
+            } else {
+                alert('Error: ' + (data.error || 'Failed to process payment.'));
+                btn.disabled = false;
+                btn.textContent = '✅ Confirm & Complete';
+            }
+        })
+        .catch(err => {
+            console.error(err);
+            alert('Network error. Please try again.');
+            btn.disabled = false;
+            btn.textContent = '✅ Confirm & Complete';
+        });
+    });
+
+    document.getElementById('paymentModal').addEventListener('hidden.bs.modal', function() {
+        const btn = document.getElementById('confirmPaymentBtn');
+        btn.disabled = false;
+        btn.textContent = '✅ Confirm & Complete';
+    });
+
+    document.getElementById('sendBackBtn').addEventListener('click', function() {
+        if (!currentVisitId) {
+            alert('Error: Visit ID is missing. Please refresh and try again.');
+            return;
+        }
+
+        const reason = prompt(`Send ${currentPatientName} back to the doctor. What needs fixing? (optional)`);
+        if (reason === null) return;
+
+        if (!confirm(`Send ${currentPatientName} back to the doctor? They will reappear at the front of the Queue instead of being charged now.`)) {
+            return;
+        }
+
+        const btn = this;
+        btn.disabled = true;
+        btn.textContent = 'Sending...';
+
+        fetch('/api/cashier/send_back/' + currentVisitId, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reason: reason.trim() })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                document.getElementById('paymentModal').querySelector('.btn-close').click();
+                location.reload();
+            } else {
+                alert('Error: ' + (data.error || 'Could not send this visit back to the doctor.'));
+                btn.disabled = false;
+                btn.textContent = '↩ Send Back';
+            }
+        })
+        .catch(err => {
+            console.error(err);
+            alert('Network error. Please try again.');
+            btn.disabled = false;
+            btn.textContent = '↩ Send Back';
+        });
+    });
+
+    function cmEscapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str || '';
+        return div.innerHTML;
+    }
+    </script>
+</body>
+</html>

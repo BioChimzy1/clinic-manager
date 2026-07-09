@@ -85,7 +85,7 @@ def get_price_list_data(clinic_id):
                    SUM(CASE WHEN expiry_date >= ? THEN quantity ELSE 0 END) AS usable_qty,
                    SUM(CASE WHEN expiry_date <  ? THEN quantity ELSE 0 END) AS expired_qty
             FROM inventory
-            WHERE is_active = 1
+            WHERE is_active = 1 AND clinic_id = ?
             GROUP BY name_key, category
         ) AS stock
             ON stock.name_key = LOWER(TRIM(linked_item.item_name))
@@ -100,7 +100,7 @@ def get_price_list_data(clinic_id):
                 ELSE 2
             END,
             price_list.item_name
-    ''', (today_str, today_str, clinic_id))
+    ''', (today_str, today_str, clinic_id, clinic_id))
     rows = cursor.fetchall()
     return rows
 
@@ -726,7 +726,7 @@ def api_login():
         ''', (session['staff_id'],))
         clinics = cursor.fetchall()
         
-        session['user_clinics'] = clinics
+        session['user_clinics'] = [tuple(c) for c in clinics]
         
         if len(clinics) == 0:
             return jsonify({'success': True, 'needs_clinic': True})
@@ -1086,7 +1086,10 @@ def api_inventory_edit(inventory_id):
 
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT item_name, category FROM inventory WHERE id = ? AND is_active = 1", (inventory_id,))
+    cursor.execute(
+        "SELECT item_name, category FROM inventory WHERE id = ? AND clinic_id = ? AND is_active = 1",
+        (inventory_id, clinic_id)
+    )
     original = cursor.fetchone()
 
     if original is None:
@@ -1099,8 +1102,8 @@ def api_inventory_edit(inventory_id):
     cursor.execute('''
         UPDATE inventory 
         SET category = ?, item_name = ?, quantity = quantity + ?, min_alert_level = ?, expiry_date = ?, updated_at = ?
-        WHERE id = ? AND is_active = 1
-    ''', (category, item_name, quantity, min_alert, expiry, now, inventory_id))
+        WHERE id = ? AND clinic_id = ? AND is_active = 1
+    ''', (category, item_name, quantity, min_alert, expiry, now, inventory_id, clinic_id))
 
     cursor.execute('''
         UPDATE inventory
@@ -1118,9 +1121,9 @@ def api_inventory_edit(inventory_id):
         SET item_name = ?, updated_at = ? 
         WHERE inventory_id IN (
             SELECT id FROM inventory
-            WHERE LOWER(TRIM(item_name)) = LOWER(TRIM(?)) AND category = ? AND is_active = 1
+            WHERE LOWER(TRIM(item_name)) = LOWER(TRIM(?)) AND category = ? AND clinic_id = ? AND is_active = 1
         )
-    ''', (item_name, now, item_name, category))
+    ''', (item_name, now, item_name, category, clinic_id))
 
     cursor.execute("""
         SELECT id, quantity FROM inventory 
@@ -1645,12 +1648,35 @@ def api_cashier_process(visit_id):
         items_to_deduct = cursor.fetchall()
         
         for inventory_id, qty_to_deduct in items_to_deduct:
+            # price_list.inventory_id points at one specific batch row, but
+            # a given item_name+category can have several batches (different
+            # expiry dates) in this clinic. Look up the item's identity first,
+            # then pull ALL of that clinic's batches for it -- this matches
+            # the availability check in api_visit_create, which also sums
+            # quantity across every batch sharing this item_name+category.
+            cursor.execute('''
+                SELECT item_name, category
+                FROM inventory
+                WHERE id = ? AND clinic_id = ? AND is_active = 1
+            ''', (inventory_id, clinic_id))
+            linked_item = cursor.fetchone()
+
+            if linked_item is None:
+                print(f"WARNING: inventory_id {inventory_id} not found in clinic {clinic_id}; skipped deduction")
+                continue
+
+            linked_name, linked_category = linked_item
+
             cursor.execute('''
                 SELECT id, quantity, expiry_date
                 FROM inventory
-                WHERE id = ? AND clinic_id = ? AND is_active = 1
+                WHERE LOWER(TRIM(item_name)) = LOWER(TRIM(?))
+                  AND category = ?
+                  AND clinic_id = ?
+                  AND is_active = 1
+                  AND quantity > 0
                 ORDER BY expiry_date ASC
-            ''', (inventory_id, clinic_id))
+            ''', (linked_name, linked_category, clinic_id))
             batches = cursor.fetchall()
             
             remaining = qty_to_deduct
@@ -1670,7 +1696,7 @@ def api_cashier_process(visit_id):
                     remaining -= deduct
             
             if remaining > 0:
-                print(f"WARNING: Could not fully deduct inventory_id {inventory_id}, still {remaining} units short")
+                print(f"WARNING: Could not fully deduct inventory_id {inventory_id} ({linked_name}), still {remaining} units short across all batches")
         
         conn.commit()
         return jsonify({'success': True})
@@ -1936,12 +1962,12 @@ def api_retail_items():
         LEFT JOIN (
             SELECT LOWER(TRIM(item_name)) AS name_key, category,
                    SUM(CASE WHEN expiry_date >= ? THEN quantity ELSE 0 END) AS usable_qty
-            FROM inventory WHERE is_active = 1 GROUP BY name_key, category
+            FROM inventory WHERE is_active = 1 AND clinic_id = ? GROUP BY name_key, category
         ) AS stock ON stock.name_key = LOWER(TRIM(linked_item.item_name))
                  AND stock.category = linked_item.category
         WHERE price_list.clinic_id = ? AND price_list.is_active = 1
         ORDER BY price_list.item_name
-    ''', (today_str, clinic_id))
+    ''', (today_str, clinic_id, clinic_id))
     items = cursor.fetchall()
     return jsonify({'items': [{'id': r[0], 'name': r[1], 'type': r[2], 'price': r[3], 'packQty': r[4], 'inventory_id': r[5], 'usableQty': r[6]} for r in items]})
 
@@ -1977,11 +2003,11 @@ def api_retail_create_draft():
                 LEFT JOIN (
                     SELECT LOWER(TRIM(item_name)) AS name_key, category,
                            SUM(CASE WHEN expiry_date >= ? THEN quantity ELSE 0 END) AS usable_qty
-                    FROM inventory WHERE is_active = 1 GROUP BY name_key, category
+                    FROM inventory WHERE is_active = 1 AND clinic_id = ? GROUP BY name_key, category
                 ) AS stock ON stock.name_key = LOWER(TRIM(linked_item.item_name)) 
                          AND stock.category = linked_item.category
                 WHERE price_list.id = ? AND price_list.clinic_id = ? AND price_list.is_active = 1
-            ''', (today_str, item['price_list_id'], clinic_id))
+            ''', (today_str, clinic_id, item['price_list_id'], clinic_id))
             
             row = cursor.fetchone()
             if not row:
@@ -2794,13 +2820,13 @@ def api_visit_create():
                        SUM(CASE WHEN expiry_date >= ? THEN quantity ELSE 0 END) AS usable_qty,
                        SUM(CASE WHEN expiry_date <  ? THEN quantity ELSE 0 END) AS expired_qty
                 FROM inventory
-                WHERE is_active = 1
+                WHERE is_active = 1 AND clinic_id = ?
                 GROUP BY name_key, category
             ) AS stock
                 ON stock.name_key = LOWER(TRIM(linked_item.item_name))
                 AND stock.category = linked_item.category
-            WHERE price_list.id = ? AND price_list.is_active = 1
-        ''', (today_str, today_str, price_list_id))
+            WHERE price_list.id = ? AND price_list.clinic_id = ? AND price_list.is_active = 1
+        ''', (today_str, today_str, clinic_id, price_list_id, clinic_id))
         item_row = cursor.fetchone()
 
         if item_row is None:
@@ -2886,7 +2912,7 @@ def api_visit_prefill(patient_id):
                    SUM(CASE WHEN expiry_date >= ? THEN quantity ELSE 0 END) AS usable_qty,
                    SUM(CASE WHEN expiry_date <  ? THEN quantity ELSE 0 END) AS expired_qty
             FROM inventory
-            WHERE is_active = 1
+            WHERE is_active = 1 AND clinic_id = ?
             GROUP BY name_key, category
         ) AS stock
             ON stock.name_key = LOWER(TRIM(linked_item.item_name))
@@ -2894,7 +2920,7 @@ def api_visit_prefill(patient_id):
         WHERE price_list.is_active = 1
           AND price_list.clinic_id = ?
         ORDER BY price_list.item_type, price_list.item_name
-    ''', (today_str, today_str, clinic_id))
+    ''', (today_str, today_str, clinic_id, clinic_id))
     all_priced_items = cursor.fetchall()
 
     prefill_diagnosis = None
@@ -2969,6 +2995,19 @@ def api_audit():
     logs = [dict(row) for row in cursor.fetchall()]
     
     return jsonify({'logs': logs})
+    
+    
+@app.route('/service-worker.js')
+def service_worker():
+    # Served from root (not /static/) on purpose. A service worker's
+    # maximum control area defaults to the folder it's served from --
+    # registering it at /static/service-worker.js would only ever let
+    # it control pages under /static/, never /queue, /register, etc.
+    # The Service-Worker-Allowed header makes the wider scope explicit.
+    response = send_from_directory('static', 'service-worker.js')
+    response.headers['Content-Type'] = 'application/javascript'
+    response.headers['Service-Worker-Allowed'] = '/'
+    return response    
 
 # ------------------------------------------------------------------
 # SERVE SPA SHELL
@@ -2980,8 +3019,26 @@ def serve_static_page(path):
     if path.startswith('api/'):
         return jsonify({'error': 'Not found'}), 404
     if path == '':
-        path = 'dashboard'
-    return send_from_directory('static/pages', f'{path}.html')
+        path = 'home'
+    # Prevent directory traversal
+    safe_path = path.replace('..', '').strip('/')
+    try:
+        return send_from_directory('static/pages', f'{safe_path}.html')
+    except FileNotFoundError:
+        return send_from_directory('static/pages', '404.html') if os.path.exists('static/pages/404.html') else jsonify({'error': 'Not found'}), 404
+
+
+@app.after_request
+def add_cache_headers(response):
+    # Allow service worker to cache static assets and pages
+    if request.path.startswith('/static/') or request.path in [
+        '/register', '/queue', '/price_list', '/inventory', 
+        '/dashboard', '/login', '/home', '/about', '/contact',
+        '/cashier', '/loans', '/retail', '/appointments', 
+        '/finance', '/staff'
+    ]:
+        response.headers['Cache-Control'] = 'public, max-age=3600'
+    return response
 
 # ------------------------------------------------------------------
 # RUN THE APP

@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Price List — ClinicManager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#0A3530">
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+    <main>
+        <div class="container">
+            <div class="app-container">
+                <div id="cmFlashContainer"></div>
+                
+                <div class="row">
+                    <div class="col-12 mb-4">
+                        <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
+                            <h4 class="mb-0 text-dark">Price List</h4>
+                            <button class="btn btn-success btn-sm" type="button" id="addPriceToggleBtn" data-bs-toggle="collapse" data-bs-target="#addPriceForm">➕ Add Price</button>
+                        </div>
+
+                        <div class="mb-3" id="staleBanner" style="display: none;"></div>
+
+                        <!-- Collapsible Add Form -->
+                        <div class="collapse mb-4" id="addPriceForm">
+                            <div class="card card-body bg-light border position-relative">
+                                <button type="button" class="btn-close position-absolute top-0 end-0 m-2" data-bs-toggle="collapse" data-bs-target="#addPriceForm"></button>
+                                <h5 class="text-success mb-3">Add New Price Item</h5>
+
+                                <form id="priceForm">
+                                    <div class="mb-3">
+                                        <label class="form-label fw-bold">Item Type</label>
+                                        <select name="item_type" id="itemTypeSelect" class="form-select" required>
+                                            <option value="Pharmacy">Pharmacy (Drug)</option>
+                                            <option value="Laboratory">Laboratory</option>
+                                            <option value="Medical Supply">Medical Supply</option>
+                                            <option value="Procedures">Procedures</option>
+                                            <option value="Consultation">Consultation</option>
+                                            <option value="Other">Other</option>
+                                        </select>
+                                    </div>
+
+                                    <div class="mb-3" style="position: relative;">
+                                        <label class="form-label fw-bold">Item Name</label>
+                                        <input type="text" name="item_name" id="itemNameInput" class="form-control" placeholder="Type to search..." autocomplete="off" required>
+                                        <div id="results" class="bg-white border rounded shadow-sm" style="display: none; position: absolute; width: 100%; max-height: 200px; overflow-y: auto; z-index: 1050; top: 100%; left: 0; margin-top: 2px;"></div>
+                                        <div id="helperBox" class="mt-1" style="display: none;">
+                                            <small class="text-muted">Not in Inventory? <a href="/inventory" class="text-success fw-bold">➕ Add to Inventory first</a></small>
+                                        </div>
+                                    </div>
+
+                                    <div class="mb-3">
+                                        <label class="form-label fw-bold">Price per Pack (MK)</label>
+                                        <input type="number" step="0.01" name="price" class="form-control" placeholder="e.g. 1500.00" min="0" required>
+                                    </div>
+
+                                    <div class="mb-3">
+                                        <label class="form-label fw-bold">Quantity in Pack</label>
+                                        <input type="number" name="quantity" class="form-control" value="1" min="1" required>
+                                    </div>
+
+                                    <button type="submit" class="btn btn-success w-100">Add to Price List</button>
+                                </form>
+                            </div>
+                        </div>
+
+                        <!-- Price List Table -->
+                        <div class="mb-3">
+                            <input type="text" id="priceSearchInput" class="form-control" placeholder="🔍 Search by item name..." autocomplete="off">
+                        </div>
+
+                        <div id="noPriceResultsMsg" class="text-center text-muted py-4" style="display: none;">
+                            No items match your search.
+                        </div>
+
+                        <div class="table-responsive">
+                            <table class="table table-striped align-middle">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Type</th>
+                                        <th>Item Name</th>
+                                        <th class="text-end">Price (MK)</th>
+                                        <th class="text-end">Qty</th>
+                                        <th class="text-end">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="priceTableBody">
+                                    <tr><td colspan="6" class="text-center text-muted py-4">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Price History Modal -->
+    <div class="modal fade" id="priceHistoryModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header bg-secondary text-white">
+                    <h5 class="modal-title">📜 Price History: <span id="phItemName"></span></h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered table-striped">
+                            <thead class="table-dark">
+                                <tr>
+                                    <th>Date/Time</th>
+                                    <th>Changed By</th>
+                                    <th class="text-end">Old Price</th>
+                                    <th class="text-end">New Price</th>
+                                    <th class="text-end">Old Qty</th>
+                                    <th class="text-end">New Qty</th>
+                                </tr>
+                            </thead>
+                            <tbody id="priceHistoryBody">
+                                <tr><td colspan="6" class="text-center text-muted">Loading history...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/shell.js"></script>
+    <script src="/static/js/outbox.js"></script>
+    <script>
+    let autocompleteItems = [];
+    let isOfflineMode = false;
+
+    document.addEventListener('DOMContentLoaded', async function () {
+        const { authenticated } = await CMShell.init({ active: 'price_list' });
+        if (!authenticated) return;
+
+        loadPriceList();
+        window.addEventListener('online', loadPriceList);
+
+        // Table filter
+        document.getElementById('priceSearchInput').addEventListener('input', function() {
+            applyPriceSearch(this.value.trim().toLowerCase());
+        });
+
+        // Autocomplete
+        const nameInput = document.getElementById('itemNameInput');
+        const results = document.getElementById('results');
+        const catSelect = document.getElementById('itemTypeSelect');
+        const helperBox = document.getElementById('helperBox');
+
+        function closeResults() {
+            results.style.display = 'none';
+            results.innerHTML = '';
+            helperBox.style.display = 'none';
+        }
+
+        nameInput.addEventListener('input', function() {
+            const query = this.value.trim();
+            const selectedCategory = catSelect.value;
+            if (query.length === 0) { closeResults(); return; }
+
+            let matches = autocompleteItems.filter(item =>
+                item.name.toLowerCase().includes(query.toLowerCase()) &&
+                (selectedCategory === '' || item.category === selectedCategory)
+            );
+
+            results.innerHTML = '';
+            helperBox.style.display = 'none';
+
+            if (matches.length === 0) {
+                if (selectedCategory === 'Pharmacy' || selectedCategory === 'Laboratory' || selectedCategory === 'Medical Supply') {
+                    helperBox.style.display = 'block';
+                }
+                results.innerHTML = '<div class="p-3 text-muted small">No matches found.</div>';
+                results.style.display = 'block';
+                return;
+            }
+
+            matches.forEach((item) => {
+                const div = document.createElement('div');
+                div.className = 'p-2 border-bottom bg-white';
+                div.style.cursor = 'pointer';
+                div.innerHTML = `<strong>${cmEscapeHtml(item.name)}</strong> <small class="text-muted">(${cmEscapeHtml(item.category)})</small>`;
+                div.addEventListener('click', () => {
+                    nameInput.value = item.name;
+                    catSelect.value = item.category;
+                    closeResults();
+                });
+                results.appendChild(div);
+            });
+
+            results.style.display = 'block';
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!results.contains(e.target) && e.target !== nameInput) {
+                closeResults();
+            }
+        });
+
+        // Categories that actually exist as inventory items -- these are the
+        // only ones where a price_list entry should ever get linked to a real
+        // stock record. Procedures/Consultation have no inventory equivalent
+        // at all, so they stay free-typed.
+        const STOCK_LINKED_CATEGORIES = ['Pharmacy', 'Laboratory', 'Medical Supply'];
+
+        // Add price form submit
+        document.getElementById('priceForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const formData = new FormData(this);
+            const data = {};
+            formData.forEach((value, key) => { data[key] = value; });
+            if (typeof data.item_name === 'string') {
+                data.item_name = data.item_name.trim().replace(/\s+/g, ' ');
+            }
+
+            if (STOCK_LINKED_CATEGORIES.includes(data.item_type)) {
+                const normalizedTyped = data.item_name.toLowerCase();
+                const matchedInList = autocompleteItems.some(item =>
+                    item.category === data.item_type &&
+                    item.name.trim().replace(/\s+/g, ' ').toLowerCase() === normalizedTyped
+                );
+                if (!matchedInList) {
+                    alert(`"${data.item_name}" doesn't match an item in Inventory under ${data.item_type}. Please select it from the suggestions list, or add it to Inventory first if it's genuinely new.`);
+                    return;
+                }
+            }
+
+            const btn = this.querySelector('button[type="submit"]');
+            btn.disabled = true;
+            btn.textContent = 'Adding...';
+
+            try {
+                const res = await fetch('/api/price_list/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                const result = await res.json();
+                if (result.success) {
+                    bootstrap.Collapse.getInstance(document.getElementById('addPriceForm')).hide();
+                    loadPriceList();
+                    this.reset();
+                } else {
+                    alert('Error: ' + (result.error || 'Could not add price'));
+                    btn.disabled = false;
+                    btn.textContent = 'Add to Price List';
+                }
+            } catch (err) {
+                alert('Network error. Please try again.');
+                btn.disabled = false;
+                btn.textContent = 'Add to Price List';
+            }
+        });
+    });
+
+    async function loadPriceList() {
+        try {
+            const res = await fetch('/api/price_list');
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+            await cmSavePriceListSnapshot(data);
+            renderPriceList(data, false);
+        } catch (err) {
+            const cached = await cmGetPriceListSnapshot();
+            if (cached) {
+                renderPriceList(cached, true);
+            } else {
+                document.getElementById('priceTableBody').innerHTML =
+                    '<tr><td colspan="6" class="text-center text-muted py-4">No cached price list yet. Connect once to load it.</td></tr>';
+            }
+        }
+    }
+
+    function renderPriceList(data, isStale) {
+        isOfflineMode = isStale;
+        autocompleteItems = [
+            ...(data.inventory_items || []),
+            ...(data.items || []).map((item) => ({ name: item.item_name, category: item.item_type }))
+        ];
+
+        const banner = document.getElementById('staleBanner');
+        const addBtn = document.getElementById('addPriceToggleBtn');
+
+        if (isStale) {
+            const when = new Date(data.fetched_at).toLocaleString();
+            banner.className = 'alert alert-warning py-2 px-3 mb-3';
+            banner.innerHTML = `⏳ As of ${when} — go online to see current stock or updated prices.`;
+            banner.style.display = 'block';
+            addBtn.disabled = true;
+            addBtn.title = 'Connect to the internet to add prices';
+        } else {
+            banner.style.display = 'none';
+            addBtn.disabled = false;
+            addBtn.title = '';
+        }
+
+        const items = data.items || [];
+        const tbody = document.getElementById('priceTableBody');
+
+        if (items.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No prices added yet.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = items.map(renderPriceRow).join('');
+        attachRowHandlers();
+
+        const searchInput = document.getElementById('priceSearchInput');
+        if (searchInput) {
+            applyPriceSearch(searchInput.value.trim().toLowerCase());
+        }
+    }
+
+    function renderPriceRow(item) {
+        const isOutOfStock = (item.no_stock_concept === 0 && item.usable_qty === 0 && item.expired_qty === 0);
+
+        let stockBadge = '';
+        if (item.no_stock_concept === 1) {
+            stockBadge = '';
+        } else if (item.usable_qty > 0 && item.expired_qty === 0) {
+            stockBadge = `<span class="badge bg-success ms-1">📦 ${item.usable_qty} in stock</span>`;
+        } else if (item.usable_qty > 0 && item.expired_qty > 0) {
+            stockBadge = `<span class="badge bg-success ms-1">📦 ${item.usable_qty} in stock</span> <span class="badge bg-warning text-dark ms-1">⚠️ ${item.expired_qty} expired</span>`;
+        } else if (item.usable_qty === 0 && item.expired_qty > 0) {
+            stockBadge = `<span class="badge" style="background-color: #6f0000; color: #fff;">⛔ ${item.expired_qty} expired, 0 usable</span>`;
+        } else {
+            stockBadge = '<span class="badge bg-secondary ms-1">🚫 Out of stock</span>';
+        }
+
+        const priceFormatted = (item.price / 100).toFixed(2);
+        const disabledAttr = isOfflineMode ? 'disabled title="Connect to the internet to edit"' : '';
+
+        const actions = isOfflineMode
+            ? `<span class="text-muted small">🔒 Offline — view only</span>`
+            : `
+                <div class="d-flex flex-column flex-md-row gap-1 align-items-md-end align-items-start">
+                    <button class="btn btn-outline-primary btn-sm py-0 px-2 save-edit-btn" data-id="${item.id}" style="font-size: 0.75rem;">💾</button>
+                    <button class="btn btn-outline-secondary btn-sm py-0 px-2 history-btn" data-id="${item.id}" data-name="${cmEscapeHtml(item.item_name)}" style="font-size: 0.75rem;">📜 Hist</button>
+                    <a href="#" class="btn btn-outline-danger btn-sm py-0 px-2 delete-price-btn" data-id="${item.id}" style="font-size: 0.75rem;">🗑️</a>
+                </div>
+            `;
+
+        return `
+            <tr class="${isOutOfStock ? 'opacity-50' : ''}" data-name="${cmEscapeHtml(item.item_name.toLowerCase())}">
+                <td>${item.id}</td>
+                <td><span class="badge bg-info text-dark">${cmEscapeHtml(item.item_type)}</span></td>
+                <td><strong>${cmEscapeHtml(item.item_name)}</strong> ${stockBadge}</td>
+                <td class="text-end">
+                    <input type="number" step="0.01" class="form-control form-control-sm d-inline-block edit-price"
+                           style="width: 100px;" value="${priceFormatted}" data-id="${item.id}" min="0" ${disabledAttr}>
+                </td>
+                <td class="text-end">
+                    <input type="number" class="form-control form-control-sm d-inline-block edit-qty"
+                           style="width: 60px;" value="${item.quantity}" data-id="${item.id}" min="0" ${disabledAttr}>
+                </td>
+                <td class="text-end">${actions}</td>
+            </tr>
+        `;
+    }
+
+    function applyPriceSearch(query) {
+        const rows = document.querySelectorAll('#priceTableBody tr[data-name]');
+        const noResultsMsg = document.getElementById('noPriceResultsMsg');
+        let visibleCount = 0;
+
+        rows.forEach((row) => {
+            const matches = row.getAttribute('data-name').includes(query);
+            row.style.display = matches ? '' : 'none';
+            if (matches) visibleCount++;
+        });
+
+        noResultsMsg.style.display = (visibleCount === 0 && query.length > 0 && rows.length > 0) ? 'block' : 'none';
+    }
+
+    function attachRowHandlers() {
+        // Save edit buttons
+        document.querySelectorAll('.save-edit-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const id = this.getAttribute('data-id');
+                const row = this.closest('tr');
+                const priceInput = row.querySelector('.edit-price');
+                const qtyInput = row.querySelector('.edit-qty');
+
+                const price = parseFloat(priceInput.value) * 100;
+                const qty = parseInt(qtyInput.value);
+
+                fetch('/api/price_list/update/' + id, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ price: price, quantity: qty })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        this.innerText = '✅';
+                        setTimeout(() => this.innerText = '💾', 2000);
+                    } else {
+                        alert('Error saving changes!');
+                    }
+                })
+                .catch(() => alert('Could not save -- check your connection.'));
+            });
+        });
+
+        // History buttons
+        const priceHistoryModal = new bootstrap.Modal(document.getElementById('priceHistoryModal'));
+        document.querySelectorAll('.history-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const itemId = this.dataset.id;
+                const itemName = this.dataset.name;
+
+                document.getElementById('phItemName').textContent = itemName;
+                document.getElementById('priceHistoryBody').innerHTML = '<tr><td colspan="6" class="text-center text-muted">Loading history...</td></tr>';
+                priceHistoryModal.show();
+
+                fetch('/api/price_list/history/' + itemId)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.history.length === 0) {
+                        document.getElementById('priceHistoryBody').innerHTML = '<tr><td colspan="6" class="text-center text-muted">No price changes recorded yet.</td></tr>';
+                        return;
+                    }
+
+                    let html = '';
+                    data.history.forEach(record => {
+                        html += `
+                            <tr>
+                                <td><small>${record.changed_at.slice(0, 16)}</small></td>
+                                <td><small>${record.changed_by}</small></td>
+                                <td class="text-end text-danger">MK ${(record.old_price / 100).toFixed(2)}</td>
+                                <td class="text-end text-success">MK ${(record.new_price / 100).toFixed(2)}</td>
+                                <td class="text-end">${record.old_qty}</td>
+                                <td class="text-end">${record.new_qty}</td>
+                            </tr>
+                        `;
+                    });
+                    document.getElementById('priceHistoryBody').innerHTML = html;
+                })
+                .catch(() => {
+                    document.getElementById('priceHistoryBody').innerHTML = '<tr><td colspan="6" class="text-center text-danger">Error loading history.</td></tr>';
+                });
+            });
+        });
+
+        // Delete buttons
+        document.querySelectorAll('.delete-price-btn').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+                e.preventDefault();
+                if (!confirm('Delete this price item?')) return;
+                
+                fetch('/api/price_list/delete/' + this.dataset.id, { method: 'DELETE' })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.success) {
+                            loadPriceList();
+                        } else {
+                            alert('Error: ' + (data.error || 'Could not delete'));
+                        }
+                    });
+            });
+        });
+    }
+
+    function cmEscapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str || '';
+        return div.innerHTML;
+    }
+    </script>
+</body>
+</html>
