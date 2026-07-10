@@ -41,9 +41,9 @@
                                 <thead class="table-dark">
                                     <tr>
                                         <th>Patient</th>
-                                        <th class="text-end">Total (MK)</th>
-                                        <th class="text-end">Paid (MK)</th>
-                                        <th class="text-end">Balance (MK)</th>
+                                        <th class="text-end">Total (<span class="currency-symbol-header">MK</span>)</th>
+                                        <th class="text-end">Paid (<span class="currency-symbol-header">MK</span>)</th>
+                                        <th class="text-end">Balance (<span class="currency-symbol-header">MK</span>)</th>
                                         <th>Witness</th>
                                         <th>Due Date</th>
                                         <th class="text-end">Action</th>
@@ -67,6 +67,8 @@
         const { authenticated } = await CMShell.init({ active: 'loans' });
         if (!authenticated) return;
 
+        // Load currency first
+        await loadCurrency();
         loadLoans();
         window.addEventListener('online', loadLoans);
 
@@ -74,6 +76,26 @@
             applyLoanSearch(this.value.trim().toLowerCase());
         });
     });
+
+    let currentCurrency = { symbol: 'MK', subunit_ratio: 100 };
+
+    async function loadCurrency() {
+        try {
+            const res = await fetch('/api/clinic/currency');
+            if (res.ok) {
+                currentCurrency = await res.json();
+                // Update currency symbols on the page
+                document.querySelectorAll('.currency-symbol-header')
+                    .forEach(el => el.textContent = currentCurrency.symbol);
+            }
+        } catch (err) {
+            console.error('Failed to load currency:', err);
+        }
+    }
+
+    function formatCurrency(amount) {
+        return `${currentCurrency.symbol} ${(amount / currentCurrency.subunit_ratio).toFixed(2)}`;
+    }
 
     async function loadLoans() {
         try {
@@ -113,9 +135,9 @@
             return `
                 <tr data-name="${cmEscapeHtml((loan.patient_name || '🏪 retail sale').toLowerCase())}">
                     <td><strong>${cmEscapeHtml(displayName)}</strong>${typeBadge}</td>
-                    <td class="text-end">${(loan.total_fee / 100).toFixed(2)}</td>
-                    <td class="text-end">${(loan.amount_paid / 100).toFixed(2)}</td>
-                    <td class="text-end text-danger fw-bold">${(loan.balance / 100).toFixed(2)}</td>
+                    <td class="text-end">${formatCurrency(loan.total_fee)}</td>
+                    <td class="text-end">${formatCurrency(loan.amount_paid)}</td>
+                    <td class="text-end text-danger fw-bold">${formatCurrency(loan.balance)}</td>
                     <td><small>${cmEscapeHtml(loan.witness || '—')}</small></td>
                     <td>${dueCell}</td>
                     <td class="text-end">

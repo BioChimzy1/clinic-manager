@@ -75,6 +75,25 @@ const CMShell = (function () {
                 </div>`;
         }
 
+        // --- CURRENCY SWITCHER ADDED HERE ---
+        let currencySwitcher = '';
+        // Only show if user is in a clinic
+        if (session.clinic_id) {
+            // We use a placeholder symbol 'MK' until the API loads the actual current currency
+            currencySwitcher = `
+                <div class="nav-item dropdown" data-role-allow="admin">
+                    <a class="nav-link dropdown-toggle" href="#" id="currencyDropdown" role="button" data-bs-toggle="dropdown">
+                        💰 <span id="currencySymbolNav">MK</span>
+                    </a>
+                    <ul class="dropdown-menu dropdown-menu-end" id="currencyDropdownMenu">
+                        <li><h6 class="dropdown-header">Select Currency</h6></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li><span class="dropdown-item-text text-muted small">Loading...</span></li>
+                    </ul>
+                </div>`;
+        }
+        // ------------------------------------
+
         const nav = document.createElement('nav');
         nav.className = 'navbar navbar-expand-lg';
         nav.innerHTML = `
@@ -86,6 +105,7 @@ const CMShell = (function () {
                 <div class="collapse navbar-collapse" id="navbarNav">
                     <div class="navbar-nav ms-auto flex-row flex-wrap" style="gap: 0.15rem 0.3rem;">
                         ${navHtml}
+                        ${currencySwitcher}  <!-- CURRENCY SWITCHER RENDERED BEFORE CLINIC -->
                         ${clinicSwitcher}
                         <a class="nav-link" href="#" id="cmLogoutLink">🚪 Logout</a>
                     </div>
@@ -99,6 +119,7 @@ const CMShell = (function () {
             window.location.href = '/home';
         });
 
+        // --- CLINIC DROPDOWN LOGIC ---
         const dropdownMenu = document.getElementById('clinicDropdownMenu');
         if (dropdownMenu) {
             dropdownMenu.querySelectorAll('[data-clinic-id]').forEach(el => {
@@ -118,6 +139,68 @@ const CMShell = (function () {
                     }
                 });
             });
+        }
+
+        // --- CURRENCY DROPDOWN LOGIC ---
+        const currencyDropdownMenu = document.getElementById('currencyDropdownMenu');
+        const currencySymbolNav = document.getElementById('currencySymbolNav');
+        
+        if (currencyDropdownMenu && session.clinic_id) {
+            // 1. Fetch current clinic currency to set the nav symbol
+            fetch('/api/clinic/currency')
+                .then(res => res.json())
+                .then(currentCurrency => {
+                    if(currencySymbolNav) {
+                        currencySymbolNav.textContent = currentCurrency.symbol;
+                    }
+                })
+                .catch(() => {
+                    if(currencySymbolNav) currencySymbolNav.textContent = 'MK'; // fallback
+                });
+
+            // 2. Fetch list of all currencies and populate dropdown
+            fetch('/api/currencies')
+                .then(res => res.json())
+                .then(data => {
+                    // Clear loading text safely
+                    currencyDropdownMenu.innerHTML = `
+                        <li><h6 class="dropdown-header">Select Currency</h6></li>
+                        <li><hr class="dropdown-divider"></li>
+                    `;
+                    
+                    if (data.currencies && data.currencies.length > 0) {
+                        data.currencies.forEach(c => {
+                            const li = document.createElement('li');
+                            li.innerHTML = `<a class="dropdown-item" href="#" data-currency-id="${c.id}">${c.symbol} - ${c.name}</a>`;
+                            li.querySelector('a').addEventListener('click', async (e) => {
+                                e.preventDefault();
+                                const currencyId = e.currentTarget.getAttribute('data-currency-id');
+                                const res = await fetch('/api/clinic/currency', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ currency_id: currencyId })
+                                });
+                                const data = await res.json();
+                                if (data.success) {
+                                    window.location.reload(); // Reload to apply new currency everywhere
+                                } else {
+                                    alert('Error: ' + (data.error || 'Could not change currency'));
+                                }
+                            });
+                            currencyDropdownMenu.appendChild(li);
+                        });
+                    } else {
+                        currencyDropdownMenu.innerHTML += `<li><span class="dropdown-item-text text-muted small">No currencies available</span></li>`;
+                    }
+                })
+                .catch(err => {
+                    console.error('Failed to load currencies:', err);
+                    currencyDropdownMenu.innerHTML = `
+                        <li><h6 class="dropdown-header">Select Currency</h6></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li><span class="dropdown-item-text text-danger small">Error loading currencies</span></li>
+                    `;
+                });
         }
     }
 
@@ -196,7 +279,7 @@ const CMShell = (function () {
         });
     }
 
-        async function init(opts) {
+    async function init(opts) {
         opts = opts || {};
         const activePage = opts.active || '';
         registerServiceWorker();

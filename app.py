@@ -55,7 +55,13 @@ def require_permission(permission):
 # ------------------------------------------------------------------
 
 def get_clinic_currency(clinic_id):
-    """Get the currency for a specific clinic"""
+    """Get the currency for a specific clinic with request-scoped caching"""
+    
+    # Check if already cached in this request
+    cache_key = f'currency_{clinic_id}'
+    if hasattr(g, cache_key):
+        return getattr(g, cache_key)
+    
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute('''
@@ -65,16 +71,23 @@ def get_clinic_currency(clinic_id):
         WHERE c.id = ?
     ''', (clinic_id,))
     row = cursor.fetchone()
+    
     if row:
-        return {
+        result = {
             'id': row[0],
             'code': row[1],
             'symbol': row[2],
             'subunit_name': row[3],
             'subunit_ratio': row[4]
         }
-    # Fallback to MWK
-    return {'code': 'MWK', 'symbol': 'MK', 'subunit_name': 'Tambala', 'subunit_ratio': 100}
+    else:
+        # Fallback to MWK
+        result = {'code': 'MWK', 'symbol': 'MK', 'subunit_name': 'Tambala', 'subunit_ratio': 100}
+    
+    # Cache it for this request
+    setattr(g, cache_key, result)
+    
+    return result
 
 def format_amount(amount, currency=None):
     """Format an amount in the given currency.

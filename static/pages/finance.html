@@ -36,7 +36,7 @@
                                     <div class="d-flex justify-content-between">
                                         <div>
                                             <small class="text-muted">Total Cash</small>
-                                            <h4 class="mb-0 text-success" id="statTotalCash">MK 0.00</h4>
+                                            <h4 class="mb-0 text-success" id="statTotalCash"><span class="currency-symbol">MK</span> 0.00</h4>
                                         </div>
                                         <span class="display-6 text-success">💰</span>
                                     </div>
@@ -47,7 +47,7 @@
                                     <div class="d-flex justify-content-between">
                                         <div>
                                             <small class="text-muted">Outstanding Loans</small>
-                                            <h4 class="mb-0 text-warning" id="statOutstandingLoans">MK 0.00</h4>
+                                            <h4 class="mb-0 text-warning" id="statOutstandingLoans"><span class="currency-symbol">MK</span> 0.00</h4>
                                         </div>
                                         <span class="display-6 text-warning">📋</span>
                                     </div>
@@ -58,7 +58,7 @@
                                     <div class="d-flex justify-content-between">
                                         <div>
                                             <small class="text-muted">Discounts Given</small>
-                                            <h4 class="mb-0 text-info" id="statDiscounts">MK 0.00</h4>
+                                            <h4 class="mb-0 text-info" id="statDiscounts"><span class="currency-symbol">MK</span> 0.00</h4>
                                         </div>
                                         <span class="display-6 text-info">🏷️</span>
                                     </div>
@@ -69,7 +69,7 @@
                                     <div class="d-flex justify-content-between">
                                         <div>
                                             <small class="text-muted">Net Revenue</small>
-                                            <h4 class="mb-0 text-primary" id="statNetRevenue">MK 0.00</h4>
+                                            <h4 class="mb-0 text-primary" id="statNetRevenue"><span class="currency-symbol">MK</span> 0.00</h4>
                                         </div>
                                         <span class="display-6 text-primary">📈</span>
                                     </div>
@@ -80,7 +80,7 @@
                                     <div class="d-flex justify-content-between">
                                         <div>
                                             <small class="text-muted">Total Expenses</small>
-                                            <h4 class="mb-0 text-secondary" id="statExpenses">MK 0.00</h4>
+                                            <h4 class="mb-0 text-secondary" id="statExpenses"><span class="currency-symbol">MK</span> 0.00</h4>
                                         </div>
                                         <span class="display-6 text-secondary">💸</span>
                                     </div>
@@ -91,7 +91,7 @@
                                     <div class="d-flex justify-content-between">
                                         <div>
                                             <small class="text-muted">Net Profit</small>
-                                            <h4 class="mb-0 text-success" id="statNetProfit">MK 0.00</h4>
+                                            <h4 class="mb-0 text-success" id="statNetProfit"><span class="currency-symbol">MK</span> 0.00</h4>
                                         </div>
                                         <span class="display-6 text-success">📊</span>
                                     </div>
@@ -162,7 +162,7 @@
                                                     <input type="text" name="description" class="form-control form-control-sm" placeholder="e.g. Fuel for pickup" required>
                                                 </div>
                                                 <div class="mb-2">
-                                                    <label class="form-label small fw-bold">Amount (MK)</label>
+                                                    <label class="form-label small fw-bold">Amount (<span class="currency-symbol-form">MK</span>)</label>
                                                     <input type="number" step="0.01" name="amount" class="form-control form-control-sm" placeholder="e.g. 500.00" required>
                                                 </div>
                                                 <button type="submit" class="btn btn-success btn-sm w-100">Save Expense</button>
@@ -203,11 +203,14 @@
     <script>
     let currentPeriod = 'today';
     let currentOffset = 0;
+    let currentCurrency = { symbol: 'MK', subunit_ratio: 100 };
 
     document.addEventListener('DOMContentLoaded', async function () {
         const { authenticated } = await CMShell.init({ active: 'finance' });
         if (!authenticated) return;
 
+        // Load currency first
+        await loadCurrency();
         loadFinance('today');
         loadTransactions('today', 0);
         loadExpenses('today');
@@ -264,6 +267,24 @@
         });
     });
 
+    async function loadCurrency() {
+        try {
+            const res = await fetch('/api/clinic/currency');
+            if (res.ok) {
+                currentCurrency = await res.json();
+                // Update all currency symbols on the page
+                document.querySelectorAll('.currency-symbol, .currency-symbol-form')
+                    .forEach(el => el.textContent = currentCurrency.symbol);
+            }
+        } catch (err) {
+            console.error('Failed to load currency:', err);
+        }
+    }
+
+    function formatCurrency(amount) {
+        return `${currentCurrency.symbol} ${(amount / currentCurrency.subunit_ratio).toFixed(2)}`;
+    }
+
     async function loadFinance(period) {
         try {
             const res = await fetch('/api/finance/stats?period=' + period);
@@ -276,15 +297,15 @@
     }
 
     function renderFinanceStats(data) {
-        document.getElementById('statTotalCash').textContent = 'MK ' + (data.total_cash / 100).toFixed(2);
-        document.getElementById('statOutstandingLoans').textContent = 'MK ' + (data.outstanding_loans / 100).toFixed(2);
-        document.getElementById('statDiscounts').textContent = 'MK ' + (data.total_discounts / 100).toFixed(2);
-        document.getElementById('statNetRevenue').textContent = 'MK ' + (data.net_revenue / 100).toFixed(2);
-        document.getElementById('statExpenses').textContent = 'MK ' + (data.total_expenses / 100).toFixed(2);
+        document.getElementById('statTotalCash').textContent = formatCurrency(data.total_cash);
+        document.getElementById('statOutstandingLoans').textContent = formatCurrency(data.outstanding_loans);
+        document.getElementById('statDiscounts').textContent = formatCurrency(data.total_discounts);
+        document.getElementById('statNetRevenue').textContent = formatCurrency(data.net_revenue);
+        document.getElementById('statExpenses').textContent = formatCurrency(data.total_expenses);
         
         const profit = data.net_profit;
         const profitEl = document.getElementById('statNetProfit');
-        profitEl.textContent = 'MK ' + (profit / 100).toFixed(2);
+        profitEl.textContent = formatCurrency(profit);
         profitEl.className = profit >= 0 ? 'mb-0 text-success' : 'mb-0 text-danger';
     }
 
@@ -308,7 +329,6 @@
             tbody.innerHTML = '';
         }
 
-        // ✅ FIX: Safely handle cases where transactions might be undefined or null
         const transactions = data.transactions || [];
 
         if (transactions.length === 0 && !append) {
@@ -330,15 +350,15 @@
             tr.innerHTML = `
                 <td>
                     <strong>${cmEscapeHtml(gt.patient)}</strong>
-                    ${gt.discount_amount > 0 ? `<br><small class="text-muted">Discount: MK ${(gt.discount_amount / 100).toFixed(2)}</small>` : ''}
+                    ${gt.discount_amount > 0 ? `<br><small class="text-muted">Discount: ${formatCurrency(gt.discount_amount)}</small>` : ''}
                     ${gt.is_retail ? '<span class="badge bg-success ms-1">Retail</span>' : ''}
                 </td>
                 <td>
                     <small>${summaryLabel}</small>
-                    <br><small class="text-muted">MK ${(gt.summary_amount / 100).toFixed(2)}</small>
+                    <br><small class="text-muted">${formatCurrency(gt.summary_amount)}</small>
                 </td>
-                <td class="text-end">MK ${(gt.total_fee / 100).toFixed(2)}</td>
-                <td class="text-end text-danger fw-bold">MK ${(gt.outstanding / 100).toFixed(2)}</td>
+                <td class="text-end">${formatCurrency(gt.total_fee)}</td>
+                <td class="text-end text-danger fw-bold">${formatCurrency(gt.outstanding)}</td>
                 <td>
                     <span class="badge ${gt.status === 'Paid' ? 'bg-success' : 'bg-info text-dark'}">
                         ${gt.status}
@@ -347,11 +367,30 @@
                 <td class="text-end">
                     <div class="d-flex justify-content-end gap-2">
                         ${gt.status === 'Loan Active' ? `<a href="/static/pages/loan_details.html?visit_id=${gt.visit_id}" class="btn btn-outline-primary btn-sm">View Loan</a>` : ''}
+                        <button type="button" class="btn btn-outline-secondary btn-sm toggle-items" data-target="#items-${gt.visit_id}">📦 Items ▾</button>
+                        
                         <button type="button" class="btn btn-outline-secondary btn-sm toggle-installments" data-target="#inst-${gt.visit_id}">▾ Installments</button>
                     </div>
                 </td>
             `;
             tbody.appendChild(tr);
+
+            // Items row
+            if (gt.items_sold && gt.items_sold.length > 0) {
+                const itemsRow = document.createElement('tr');
+                itemsRow.id = 'items-' + gt.visit_id;
+                itemsRow.className = 'items-row';
+                itemsRow.style.display = 'none';
+                itemsRow.style.background = 'rgba(0,0,0,0.02)';
+                
+                let itemsHtml = '<td colspan="6" style="padding: .5rem 1rem;"><div class="small"><strong>Items Sold</strong><div class="table-responsive mt-2"><table class="table table-sm mb-0"><thead><tr><th>Category</th><th>Item</th><th class="text-end">Qty</th></tr></thead><tbody>';
+                gt.items_sold.forEach(item => {
+                    itemsHtml += `<tr><td><span class="badge bg-info text-dark">${cmEscapeHtml(item.category)}</span></td><td>${cmEscapeHtml(item.name)}</td><td class="text-end">${item.quantity}</td></tr>`;
+                });
+                itemsHtml += '</tbody></table></div></div></td>';
+                itemsRow.innerHTML = itemsHtml;
+                tbody.appendChild(itemsRow);
+            }
 
             // Installments row
             if (gt.installments && gt.installments.length > 0) {
@@ -363,7 +402,7 @@
                 
                 let instHtml = '<td colspan="6" style="padding: .5rem 1rem;"><div class="small"><strong>Payment History</strong><div class="table-responsive mt-2"><table class="table table-sm mb-0"><thead><tr><th>Date</th><th class="text-end">Amount</th></tr></thead><tbody>';
                 gt.installments.forEach(inst => {
-                    instHtml += `<tr><td><small>${inst.date}</small></td><td class="text-end">MK ${(inst.amount / 100).toFixed(2)}</td></tr>`;
+                    instHtml += `<tr><td><small>${inst.date}</small></td><td class="text-end">${formatCurrency(inst.amount)}</td></tr>`;
                 });
                 instHtml += '</tbody></table></div></div></td>';
                 instRow.innerHTML = instHtml;
@@ -381,6 +420,15 @@
         }
 
         // Attach toggle handlers
+        tbody.querySelectorAll('.toggle-items').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const target = document.querySelector(this.dataset.target);
+                if (target) {
+                    target.style.display = target.style.display === 'none' ? 'table-row' : 'none';
+                }
+            });
+        });
+
         tbody.querySelectorAll('.toggle-installments').forEach(btn => {
             btn.addEventListener('click', function() {
                 const target = document.querySelector(this.dataset.target);
@@ -416,7 +464,7 @@
                 <td><small>${exp.date ? exp.date.slice(0, 10) : ''}</small></td>
                 <td><span class="badge bg-secondary">${cmEscapeHtml(exp.category)}</span></td>
                 <td><small>${cmEscapeHtml(exp.description)}</small></td>
-                <td class="text-end text-danger">MK ${(exp.amount / 100).toFixed(2)}</td>
+                <td class="text-end text-danger">${formatCurrency(exp.amount)}</td>
                 <td class="text-end">
                     <button class="btn btn-outline-danger btn-sm py-0 px-2 delete-expense-btn" data-id="${exp.id}">✕</button>
                 </td>

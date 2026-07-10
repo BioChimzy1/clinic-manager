@@ -141,4 +141,27 @@ main { flex: 1; padding: 2rem 0 3rem; }
     .app-container { padding: 1.25rem; border-radius: 12px; }
     .navbar-brand { font-size: 1.1rem; }
     .nav-link { font-size: 0.9rem; padding: 0.4rem 0.6rem !important; }
+    
+    /* PREVENT DROPDOWNS FROM PUSHING CONTENT DOWN */
+    .dropdown-menu-end {
+        right: auto !important;
+        left: 0 !important;
+    }
+    
+    /* FORCE DROPDOWNS TO FLOAT OVER THE PAGE INSTEAD OF PUSHING */
+    .navbar-nav .dropdown-menu {
+        position: absolute !important;
+        top: 100%;
+        z-index: 9999 !important; /* Ensure it sits on top of everything */
+        margin-top: 0 !important;
+        width: 90vw !important;   /* Make it take up 90% of the screen width */
+        max-width: 350px !important; /* Prevent it from getting too wide on tablets */
+    }
+
+    /* Add a bit of space below the navbar so the dropdown doesn't get cut off */
+    .navbar-nav {
+        min-height: 150px !important; 
+        position: relative !important;
+        padding-bottom: 10px !important;
+    }
 }

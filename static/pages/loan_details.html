@@ -40,13 +40,13 @@
                                             <dd class="col-sm-8" id="loanPatient">—</dd>
                                             
                                             <dt class="col-sm-4">Total Fee:</dt>
-                                            <dd class="col-sm-8" id="loanTotal">MK 0.00</dd>
+                                            <dd class="col-sm-8" id="loanTotal"><span class="currency-symbol">MK</span> 0.00</dd>
                                             
                                             <dt class="col-sm-4">Amount Paid:</dt>
-                                            <dd class="col-sm-8" id="loanPaid">MK 0.00</dd>
+                                            <dd class="col-sm-8" id="loanPaid"><span class="currency-symbol">MK</span> 0.00</dd>
                                             
                                             <dt class="col-sm-4">Balance:</dt>
-                                            <dd class="col-sm-8 text-danger fw-bold" id="loanBalance">MK 0.00</dd>
+                                            <dd class="col-sm-8 text-danger fw-bold" id="loanBalance"><span class="currency-symbol">MK</span> 0.00</dd>
                                             
                                             <dt class="col-sm-4">Witness:</dt>
                                             <dd class="col-sm-8" id="loanWitness">—</dd>
@@ -68,7 +68,7 @@
                                         </div>
                                         <div class="card-body">
                                             <div class="mb-3">
-                                                <label class="form-label fw-bold">Payment Amount (MK)</label>
+                                                <label class="form-label fw-bold">Payment Amount (<span class="currency-symbol">MK</span>)</label>
                                                 <input type="number" step="0.01" id="loanPaymentAmount" class="form-control" placeholder="Enter amount" min="0.01">
                                             </div>
                                             <button class="btn btn-success" id="recordLoanPaymentBtn">Record Payment</button>
@@ -88,7 +88,7 @@
                                                 <thead>
                                                     <tr>
                                                         <th>Date</th>
-                                                        <th class="text-end">Amount (MK)</th>
+                                                        <th class="text-end">Amount (<span class="currency-symbol">MK</span>)</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody id="paymentHistoryBody">
@@ -117,12 +117,34 @@
         window.location.href = '/loans';
     }
 
+    let currentCurrency = { symbol: 'MK', subunit_ratio: 100 };
+
     document.addEventListener('DOMContentLoaded', async function () {
         const { authenticated } = await CMShell.init({ active: 'loan_details' });
         if (!authenticated) return;
 
+        // Load currency first
+        await loadCurrency();
         loadLoanDetails(visitId);
     });
+
+    async function loadCurrency() {
+        try {
+            const res = await fetch('/api/clinic/currency');
+            if (res.ok) {
+                currentCurrency = await res.json();
+                // Update currency symbols on the page
+                document.querySelectorAll('.currency-symbol')
+                    .forEach(el => el.textContent = currentCurrency.symbol);
+            }
+        } catch (err) {
+            console.error('Failed to load currency:', err);
+        }
+    }
+
+    function formatCurrency(amount) {
+        return `${currentCurrency.symbol} ${(amount / currentCurrency.subunit_ratio).toFixed(2)}`;
+    }
 
     async function loadLoanDetails(id) {
         try {
@@ -141,12 +163,12 @@
         const payments = data.payments || [];
 
         document.getElementById('loanSummary').textContent = 
-            `${visit.patient_name || 'Retail Sale'} · Total: MK ${(visit.total_fee / 100).toFixed(2)} · Paid: MK ${(visit.amount_paid / 100).toFixed(2)} · Balance: MK ${((visit.total_fee - visit.amount_paid) / 100).toFixed(2)}`;
+            `${visit.patient_name || 'Retail Sale'} · Total: ${formatCurrency(visit.total_fee)} · Paid: ${formatCurrency(visit.amount_paid)} · Balance: ${formatCurrency(visit.total_fee - visit.amount_paid)}`;
 
         document.getElementById('loanPatient').textContent = visit.patient_name || '🏪 Retail Sale';
-        document.getElementById('loanTotal').textContent = 'MK ' + (visit.total_fee / 100).toFixed(2);
-        document.getElementById('loanPaid').textContent = 'MK ' + (visit.amount_paid / 100).toFixed(2);
-        document.getElementById('loanBalance').textContent = 'MK ' + ((visit.total_fee - visit.amount_paid) / 100).toFixed(2);
+        document.getElementById('loanTotal').textContent = formatCurrency(visit.total_fee);
+        document.getElementById('loanPaid').textContent = formatCurrency(visit.amount_paid);
+        document.getElementById('loanBalance').textContent = formatCurrency(visit.total_fee - visit.amount_paid);
         document.getElementById('loanWitness').textContent = visit.loan_witness || '—';
         document.getElementById('loanDueDate').textContent = visit.loan_due_date || 'No due date set';
         document.getElementById('loanStatus').innerHTML = `<span class="badge bg-info text-dark">${visit.status}</span>`;
@@ -155,7 +177,7 @@
         const balance = visit.total_fee - visit.amount_paid;
         if (visit.status === 'Loan Active' && balance > 0) {
             document.getElementById('paymentFormContainer').style.display = 'block';
-            document.getElementById('loanPaymentAmount').max = (balance / 100).toFixed(2);
+            document.getElementById('loanPaymentAmount').max = (balance / currentCurrency.subunit_ratio).toFixed(2);
         }
 
         // Payment history
@@ -166,7 +188,7 @@
             tbody.innerHTML = payments.map(p => `
                 <tr>
                     <td><small>${p.date ? p.date.slice(0, 10) : ''}</small></td>
-                    <td class="text-end">${(p.amount / 100).toFixed(2)}</td>
+                    <td class="text-end">${formatCurrency(p.amount)}</td>
                 </tr>
             `).join('');
         }
@@ -174,7 +196,7 @@
         // Record payment button
         document.getElementById('recordLoanPaymentBtn').addEventListener('click', function() {
             const amountInput = document.getElementById('loanPaymentAmount');
-            const amount = parseFloat(amountInput.value) * 100; // Convert to Tambala
+            const amount = parseFloat(amountInput.value) * currentCurrency.subunit_ratio;
             const maxAmount = visit.total_fee - visit.amount_paid;
 
             if (!amount || amount <= 0) {
@@ -186,7 +208,7 @@
                 return;
             }
 
-            if (!confirm('Record payment of MK ' + (amount / 100).toFixed(2) + '?')) {
+            if (!confirm('Record payment of ' + formatCurrency(amount) + '?')) {
                 return;
             }
 

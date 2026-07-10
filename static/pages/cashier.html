@@ -39,8 +39,8 @@
                                     <tr>
                                         <th>Patient</th>
                                         <th>Diagnosis</th>
-                                        <th class="text-end">Total (MK)</th>
-                                        <th class="text-end">Paid (MK)</th>
+                                        <th class="text-end">Total (<span class="currency-symbol-header">MK</span>)</th>
+                                        <th class="text-end">Paid (<span class="currency-symbol-header">MK</span>)</th>
                                         <th class="text-end">Action</th>
                                     </tr>
                                 </thead>
@@ -68,7 +68,7 @@
                 <div class="modal-body">
                     <div id="modalPatientInfo" class="mb-3">
                         <h6 id="modalPatientName" class="mb-0"></h6>
-                        <small class="text-muted">Total: <span id="modalTotalFee">MK 0.00</span></small>
+                        <small class="text-muted">Total: <span id="modalTotalFee"><span class="currency-symbol-modal">MK</span> 0.00</span></small>
                     </div>
 
                     <!-- Invoice Items Table -->
@@ -89,7 +89,7 @@
                             <tfoot>
                                 <tr>
                                     <th colspan="4" class="text-end">Grand Total</th>
-                                    <th class="text-end" id="invTotal">MK 0.00</th>
+                                    <th class="text-end" id="invTotal"><span class="currency-symbol-inv">MK</span> 0.00</th>
                                 </tr>
                             </tfoot>
                         </table>
@@ -100,7 +100,7 @@
                     <!-- ROUNDING -->
                     <div class="row mb-3">
                         <div class="col-md-6">
-                            <label class="form-label fw-bold">Round Total To Nearest (MK)</label>
+                            <label class="form-label fw-bold">Round Total To Nearest (<span class="currency-symbol-round">MK</span>)</label>
                             <select id="roundingSelect" class="form-select">
                                 <option value="0" selected>No rounding</option>
                                 <option value="100">100</option>
@@ -126,7 +126,7 @@
                     <!-- DISCOUNT -->
                     <div class="row mb-3">
                         <div class="col-md-6">
-                            <label class="form-label fw-bold">Discount Amount (MK)</label>
+                            <label class="form-label fw-bold">Discount Amount (<span class="currency-symbol-discount">MK</span>)</label>
                             <div class="input-group">
                                 <input type="number" step="0.01" id="discountAmount" class="form-control" placeholder="0.00" min="0">
                                 <button class="btn btn-outline-danger" type="button" id="clearDiscountBtn">✕</button>
@@ -154,15 +154,15 @@
 
                     <!-- Full Payment Info -->
                     <div id="fullPaymentInfo" class="alert alert-success">
-                        <p class="mb-0">The patient will pay the full remaining amount: <strong id="fullAmountDisplay">MK 0.00</strong></p>
+                        <p class="mb-0">The patient will pay the full remaining amount: <strong id="fullAmountDisplay"><span class="currency-symbol-full">MK</span> 0.00</strong></p>
                     </div>
 
                     <!-- Partial Payment / Loan Fields -->
                     <div id="partialPaymentFields" style="display: none;">
                         <div class="mb-3">
-                            <label class="form-label fw-bold">Amount Paid Now (MK) <span class="text-danger">*</span></label>
+                            <label class="form-label fw-bold">Amount Paid Now (<span class="currency-symbol-loan">MK</span>) <span class="text-danger">*</span></label>
                             <input type="number" step="0.01" id="loanAmount" class="form-control" placeholder="e.g. 1500.00" min="0">
-                            <small class="text-muted">Remaining balance: <span id="loanRemainingDisplay">MK 0.00</span></small>
+                            <small class="text-muted">Remaining balance: <span id="loanRemainingDisplay"><span class="currency-symbol-remaining">MK</span> 0.00</span></small>
                         </div>
                         <div class="mb-3">
                             <label class="form-label fw-bold">Witness <span class="text-danger">*</span></label>
@@ -222,6 +222,8 @@
         const { authenticated } = await CMShell.init({ active: 'cashier' });
         if (!authenticated) return;
 
+        // Load currency first, then load cashier list
+        await loadCurrency();
         loadCashierList();
         loadStaffList();
     });
@@ -230,6 +232,25 @@
     let currentTotal = 0;
     let currentPaid = 0;
     let currentPatientName = '';
+    let currentCurrency = { symbol: 'MK', subunit_ratio: 100 };
+
+    async function loadCurrency() {
+        try {
+            const res = await fetch('/api/clinic/currency');
+            if (res.ok) {
+                currentCurrency = await res.json();
+                // Update all currency symbols on the page
+                document.querySelectorAll('.currency-symbol-header, .currency-symbol-modal, .currency-symbol-inv, .currency-symbol-round, .currency-symbol-rounded, .currency-symbol-discount, .currency-symbol-full, .currency-symbol-loan, .currency-symbol-remaining')
+                    .forEach(el => el.textContent = currentCurrency.symbol);
+            }
+        } catch (err) {
+            console.error('Failed to load currency:', err);
+        }
+    }
+
+    function formatCurrency(amount) {
+        return `${currentCurrency.symbol} ${(amount / currentCurrency.subunit_ratio).toFixed(2)}`;
+    }
 
     async function loadCashierList() {
         try {
@@ -259,8 +280,8 @@
             <tr data-name="${cmEscapeHtml(visit.patient_name.toLowerCase())}">
                 <td><strong>${cmEscapeHtml(visit.patient_name)}</strong></td>
                 <td><small class="text-muted">${cmEscapeHtml(visit.diagnosis)}</small></td>
-                <td class="text-end">${(visit.total_fee / 100).toFixed(2)}</td>
-                <td class="text-end">${(visit.amount_paid / 100).toFixed(2)}</td>
+                <td class="text-end">${formatCurrency(visit.total_fee)}</td>
+                <td class="text-end">${formatCurrency(visit.amount_paid)}</td>
                 <td class="text-end">
                     <button class="btn btn-primary btn-sm process-payment-btn"
                             data-id="${visit.id}"
@@ -302,8 +323,8 @@
                 currentPatientName = this.dataset.patient;
 
                 document.getElementById('modalPatientName').textContent = currentPatientName;
-                document.getElementById('modalTotalFee').textContent = 'MK ' + (currentTotal / 100).toFixed(2);
-                document.getElementById('fullAmountDisplay').textContent = 'MK ' + (currentTotal / 100).toFixed(2);
+                document.getElementById('modalTotalFee').textContent = formatCurrency(currentTotal);
+                document.getElementById('fullAmountDisplay').textContent = formatCurrency(currentTotal);
 
                 // Reset form
                 document.getElementById('discountAmount').value = '';
@@ -335,14 +356,14 @@
                                 <tr>
                                     <td><span class="badge bg-info text-dark">${item.type}</span></td>
                                     <td><strong>${item.name}</strong></td>
-                                    <td class="text-end">MK ${(item.unit_price / 100).toFixed(2)}</td>
+                                    <td class="text-end">${formatCurrency(item.unit_price)}</td>
                                     <td class="text-end">${item.qty}</td>
-                                    <td class="text-end">MK ${(item.total / 100).toFixed(2)}</td>
+                                    <td class="text-end">${formatCurrency(item.total)}</td>
                                 </tr>
                             `;
                         });
                         document.getElementById('invoiceItemsBody').innerHTML = html;
-                        document.getElementById('invTotal').textContent = 'MK ' + (data.total / 100).toFixed(2);
+                        document.getElementById('invTotal').textContent = formatCurrency(data.total);
                     })
                     .catch(() => {
                         document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-danger">Error loading invoice.</td></tr>';
@@ -376,15 +397,15 @@
     function getRoundedBaseTotal() {
         const roundTo = parseInt(document.getElementById('roundingSelect').value, 10) || 0;
         if (roundTo <= 0) return currentTotal;
-        const roundToTambala = roundTo * 100;
-        return Math.round(currentTotal / roundToTambala) * roundToTambala;
+        const roundToSubunit = roundTo * currentCurrency.subunit_ratio;
+        return Math.round(currentTotal / roundToSubunit) * roundToSubunit;
     }
 
     function updateRoundedTotalDisplay() {
         const rounded = getRoundedBaseTotal();
-        document.getElementById('roundedTotalDisplay').value = 'MK ' + (rounded / 100).toFixed(2);
-        document.getElementById('modalTotalFee').textContent = 'MK ' + (rounded / 100).toFixed(2);
-        document.getElementById('fullAmountDisplay').textContent = 'MK ' + (getFinalTotal() / 100).toFixed(2);
+        document.getElementById('roundedTotalDisplay').value = formatCurrency(rounded);
+        document.getElementById('modalTotalFee').textContent = formatCurrency(rounded);
+        document.getElementById('fullAmountDisplay').textContent = formatCurrency(getFinalTotal());
         updateLoanRemaining();
     }
 
@@ -402,14 +423,14 @@
     });
 
     document.getElementById('discountAmount').addEventListener('input', function() {
-        document.getElementById('fullAmountDisplay').textContent = 'MK ' + (getFinalTotal() / 100).toFixed(2);
+        document.getElementById('fullAmountDisplay').textContent = formatCurrency(getFinalTotal());
         updateLoanRemaining();
     });
 
     function updateLoanRemaining() {
         const paid = parseFloat(document.getElementById('loanAmount').value) || 0;
-        const remaining = Math.max(0, getFinalTotal() / 100 - paid);
-        document.getElementById('loanRemainingDisplay').textContent = 'MK ' + remaining.toFixed(2);
+        const remaining = Math.max(0, getFinalTotal() / currentCurrency.subunit_ratio - paid);
+        document.getElementById('loanRemainingDisplay').textContent = formatCurrency(remaining * currentCurrency.subunit_ratio);
     }
 
     document.getElementById('paymentChannel').addEventListener('change', function() {
@@ -446,7 +467,7 @@
     });
 
     function getFinalTotal() {
-        const discountAmt = Math.round(parseFloat(document.getElementById('discountAmount').value) * 100) || 0;
+        const discountAmt = Math.round(parseFloat(document.getElementById('discountAmount').value) * currentCurrency.subunit_ratio) || 0;
         return Math.max(0, getRoundedBaseTotal() - discountAmt);
     }
 
@@ -454,7 +475,7 @@
         const isFull = document.querySelector('input[name="payMode"]:checked').value === 'full';
         const finalTotal = getFinalTotal();
 
-        const discountAmt = Math.round(parseFloat(document.getElementById('discountAmount').value) * 100) || 0;
+        const discountAmt = Math.round(parseFloat(document.getElementById('discountAmount').value) * currentCurrency.subunit_ratio) || 0;
         const discountReason = document.getElementById('discountReason').value.trim();
 
         if (discountAmt > 0 && !discountReason) {
@@ -478,7 +499,7 @@
         if (isFull) {
             payload.amount_paid = finalTotal;
         } else {
-            const amountPaid = Math.round(parseFloat(document.getElementById('loanAmount').value) * 100) || 0;
+            const amountPaid = Math.round(parseFloat(document.getElementById('loanAmount').value) * currentCurrency.subunit_ratio) || 0;
             const witness = document.getElementById('loanWitness').value;
             const dueDate = document.getElementById('loanDueDate').value;
 

@@ -217,7 +217,9 @@
                                 <span class="text-dark fw-bold">Go →</span>
                             </div>
                             <div class="text-center py-2">
-                                <div class="stat-number text-success" id="statTodayCash">MK 0.00</div>
+                                <div class="stat-number text-success" id="statTodayCash">
+                                    <span id="currencySymbol">MK</span> <span id="statTodayCashAmount">0.00</span>
+                                </div>
                                 <div class="stat-label">Collected Today</div>
                             </div>
                         </a>
@@ -342,7 +344,12 @@
         document.getElementById('statPricedItems').textContent = data.priced_items_count ?? '—';
         document.getElementById('statCashierCount').textContent = data.cashier_count ?? '—';
         document.getElementById('statLoansCount').textContent = data.loans_count ?? '—';
-        document.getElementById('statTodayCash').textContent = `MK ${(data.today_cash_collected / 100).toFixed(2)}`;
+
+        // Format currency with dynamic symbol
+        const currency = data.currency || { symbol: 'MK', subunit_ratio: 100 };
+        document.getElementById('currencySymbol').textContent = currency.symbol;
+        document.getElementById('statTodayCashAmount').textContent = 
+            (data.today_cash_collected / currency.subunit_ratio).toFixed(2);
 
         // Lock the "Create Clinic" button if offline
         const createClinicBtn = document.getElementById('createClinicBtn');

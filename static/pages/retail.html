@@ -35,7 +35,7 @@
                                         <thead>
                                             <tr>
                                                 <th>Started</th>
-                                                <th class="text-end">Total (MK)</th>
+                                                <th class="text-end">Total (<span class="currency-symbol-header">MK</span>)</th>
                                                 <th class="text-end">Action</th>
                                             </tr>
                                         </thead>
@@ -91,7 +91,7 @@
                                         <tfoot>
                                             <tr>
                                                 <th colspan="3" class="text-end">Grand Total</th>
-                                                <th class="text-end" id="grandTotal">MK 0.00</th>
+                                                <th class="text-end" id="grandTotal"><span class="currency-symbol-cart">MK</span> 0.00</th>
                                                 <th></th>
                                             </tr>
                                         </tfoot>
@@ -119,7 +119,7 @@
                 <div class="modal-body">
                     <div id="modalPatientInfo" class="mb-3">
                         <h6 id="modalPatientName" class="mb-0"></h6>
-                        <small class="text-muted">Total: <span id="modalTotalFee">MK 0.00</span></small>
+                        <small class="text-muted">Total: <span id="modalTotalFee"><span class="currency-symbol-modal">MK</span> 0.00</span></small>
                     </div>
 
                     <div class="table-responsive mb-3">
@@ -139,7 +139,7 @@
                             <tfoot>
                                 <tr>
                                     <th colspan="4" class="text-end">Grand Total</th>
-                                    <th class="text-end" id="invTotal">MK 0.00</th>
+                                    <th class="text-end" id="invTotal"><span class="currency-symbol-inv">MK</span> 0.00</th>
                                 </tr>
                             </tfoot>
                         </table>
@@ -149,7 +149,7 @@
 
                     <div class="row mb-3">
                         <div class="col-md-6">
-                            <label class="form-label fw-bold">Round Total To Nearest (MK)</label>
+                            <label class="form-label fw-bold">Round Total To Nearest (<span class="currency-symbol-round">MK</span>)</label>
                             <select id="roundingSelect" class="form-select">
                                 <option value="0" selected>No rounding</option>
                                 <option value="100">100</option>
@@ -166,7 +166,7 @@
                         </div>
                         <div class="col-md-6">
                             <label class="form-label fw-bold">Rounded Total</label>
-                            <input type="text" id="roundedTotalDisplay" class="form-control" value="MK 0.00" readonly>
+                            <input type="text" id="roundedTotalDisplay" class="form-control" value="0.00" readonly>
                         </div>
                     </div>
 
@@ -174,7 +174,7 @@
 
                     <div class="row mb-3">
                         <div class="col-md-6">
-                            <label class="form-label fw-bold">Discount Amount (MK)</label>
+                            <label class="form-label fw-bold">Discount Amount (<span class="currency-symbol-discount">MK</span>)</label>
                             <div class="input-group">
                                 <input type="number" step="0.01" id="discountAmount" class="form-control" placeholder="0.00" min="0">
                                 <button class="btn btn-outline-danger" type="button" id="clearDiscountBtn">✕</button>
@@ -200,14 +200,14 @@
                     </div>
 
                     <div id="fullPaymentInfo" class="alert alert-success">
-                        <p class="mb-0">The patient will pay the full remaining amount: <strong id="fullAmountDisplay">MK 0.00</strong></p>
+                        <p class="mb-0">The patient will pay the full remaining amount: <strong id="fullAmountDisplay"><span class="currency-symbol-full">MK</span> 0.00</strong></p>
                     </div>
 
                     <div id="partialPaymentFields" style="display: none;">
                         <div class="mb-3">
-                            <label class="form-label fw-bold">Amount Paid Now (MK) <span class="text-danger">*</span></label>
+                            <label class="form-label fw-bold">Amount Paid Now (<span class="currency-symbol-loan">MK</span>) <span class="text-danger">*</span></label>
                             <input type="number" step="0.01" id="loanAmount" class="form-control" placeholder="e.g. 1500.00" min="0">
-                            <small class="text-muted">Remaining balance: <span id="loanRemainingDisplay">MK 0.00</span></small>
+                            <small class="text-muted">Remaining balance: <span id="loanRemainingDisplay"><span class="currency-symbol-remaining">MK</span> 0.00</span></small>
                         </div>
                         <div class="mb-3">
                             <label class="form-label fw-bold">Witness <span class="text-danger">*</span></label>
@@ -265,15 +265,35 @@
     let retailVisitId = null;
     let retailTotal = 0;
     let selectedItem = null;
+    let currentCurrency = { symbol: 'MK', subunit_ratio: 100 };
 
     document.addEventListener('DOMContentLoaded', async function () {
         const { authenticated } = await CMShell.init({ active: 'retail' });
         if (!authenticated) return;
 
+        await loadCurrency();
         await loadRetailItems();
         loadPendingRetail();
         loadStaffList();
     });
+
+    async function loadCurrency() {
+        try {
+            const res = await fetch('/api/clinic/currency');
+            if (res.ok) {
+                currentCurrency = await res.json();
+                // Update all currency symbols on the page
+                document.querySelectorAll('.currency-symbol-header, .currency-symbol-cart, .currency-symbol-modal, .currency-symbol-inv, .currency-symbol-round, .currency-symbol-rounded, .currency-symbol-discount, .currency-symbol-full, .currency-symbol-loan, .currency-symbol-remaining')
+                    .forEach(el => el.textContent = currentCurrency.symbol);
+            }
+        } catch (err) {
+            console.error('Failed to load currency:', err);
+        }
+    }
+
+    function formatCurrency(amount) {
+        return `${currentCurrency.symbol} ${(amount / currentCurrency.subunit_ratio).toFixed(2)}`;
+    }
 
     async function loadRetailItems() {
         try {
@@ -316,7 +336,7 @@
             searchInput.value = item.name;
             closeSearchResults();
             addToCartBtn.disabled = false;
-            selectedItemLabel.innerHTML = `Selected: <strong>${item.name}</strong> <span class="text-muted">(${item.type}, MK ${(item.price / 100).toFixed(2)} per pack of ${item.packQty}${item.noStockConcept ? '' : ', ' + item.usableQty + ' in stock'})</span>`;
+            selectedItemLabel.innerHTML = `Selected: <strong>${item.name}</strong> <span class="text-muted">(${item.type}, ${formatCurrency(item.price)} per pack of ${item.packQty}${item.noStockConcept ? '' : ', ' + item.usableQty + ' in stock'})</span>`;
             selectedItemLabel.className = 'mt-2 small';
             qtyInput.value = '1';
             qtyInput.focus();
@@ -351,7 +371,7 @@
                         : '<span class="badge bg-secondary ms-1">🚫 Out of stock</span>';
                 }
 
-                div.innerHTML = `<strong>${item.name}</strong> <small class="text-muted">(${item.type}, MK ${(item.price / 100).toFixed(2)} per pack of ${item.packQty}${qtyLabel})</small> ${statusBadge}`;
+                div.innerHTML = `<strong>${item.name}</strong> <small class="text-muted">(${item.type}, ${formatCurrency(item.price)} per pack of ${item.packQty}${qtyLabel})</small> ${statusBadge}`;
 
                 if (selectable) {
                     div.addEventListener('click', () => pickItem(item));
@@ -427,8 +447,8 @@
                     retailTotal = cart.reduce((sum, item) => sum + calculateLineTotal(item, item.qty), 0);
 
                     document.getElementById('modalPatientName').textContent = '🏪 Retail Sale';
-                    document.getElementById('modalTotalFee').textContent = 'MK ' + (retailTotal / 100).toFixed(2);
-                    document.getElementById('fullAmountDisplay').textContent = 'MK ' + (retailTotal / 100).toFixed(2);
+                    document.getElementById('modalTotalFee').textContent = formatCurrency(retailTotal);
+                    document.getElementById('fullAmountDisplay').textContent = formatCurrency(retailTotal);
 
                     document.getElementById('discountAmount').value = '';
                     document.getElementById('discountReason').value = '';
@@ -459,14 +479,14 @@
                             <tr>
                                 <td><span class="badge bg-info text-dark">${item.type}</span></td>
                                 <td><strong>${item.name}</strong></td>
-                                <td class="text-end">MK ${(unitPrice / 100).toFixed(2)}</td>
+                                <td class="text-end">${formatCurrency(unitPrice)}</td>
                                 <td class="text-end">${item.qty}</td>
-                                <td class="text-end">MK ${(lineTotal / 100).toFixed(2)}</td>
+                                <td class="text-end">${formatCurrency(lineTotal)}</td>
                             </tr>
                         `;
                     });
                     document.getElementById('invoiceItemsBody').innerHTML = html;
-                    document.getElementById('invTotal').textContent = 'MK ' + (retailTotal / 100).toFixed(2);
+                    document.getElementById('invTotal').textContent = formatCurrency(retailTotal);
                 } else {
                     alert('Error: ' + data.error);
                 }
@@ -494,7 +514,7 @@
 
         if (cart.length === 0) {
             tbody.appendChild(emptyRow);
-            grandTotalEl.textContent = 'MK 0.00';
+            grandTotalEl.textContent = formatCurrency(0);
             proceedBtn.disabled = true;
             retailTotal = 0;
             return;
@@ -511,11 +531,11 @@
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td><strong>${item.name}</strong> <small class="text-muted">(${item.type})</small></td>
-                <td class="text-end">MK ${(unitPrice / 100).toFixed(2)}</td>
+                <td class="text-end">${formatCurrency(unitPrice)}</td>
                 <td>
                     <input type="number" class="form-control form-control-sm cart-qty-input" value="${item.qty}" data-index="${index}" min="1" style="width: 90px;">
                 </td>
-                <td class="text-end line-total">MK ${(lineTotal / 100).toFixed(2)}</td>
+                <td class="text-end line-total">${formatCurrency(lineTotal)}</td>
                 <td class="text-end">
                     <button class="btn btn-outline-danger btn-sm remove-item-btn" data-index="${index}">✕</button>
                 </td>
@@ -523,7 +543,7 @@
             tbody.appendChild(tr);
         });
 
-        grandTotalEl.textContent = 'MK ' + (grandTotal / 100).toFixed(2);
+        grandTotalEl.textContent = formatCurrency(grandTotal);
         retailTotal = grandTotal;
         proceedBtn.disabled = false;
 
@@ -539,7 +559,7 @@
                 if (!isNaN(raw) && raw >= 1) {
                     item.qty = raw;
                     const lineTotal = calculateLineTotal(item, item.qty);
-                    row.querySelector('.line-total').textContent = 'MK ' + (lineTotal / 100).toFixed(2);
+                    row.querySelector('.line-total').textContent = formatCurrency(lineTotal);
                     updateGrandTotalOnly();
                 }
             });
@@ -560,7 +580,7 @@
         cart.forEach((item) => {
             grandTotal += calculateLineTotal(item, item.qty);
         });
-        document.getElementById('grandTotal').textContent = 'MK ' + (grandTotal / 100).toFixed(2);
+        document.getElementById('grandTotal').textContent = formatCurrency(grandTotal);
         retailTotal = grandTotal;
     }
 
@@ -568,15 +588,15 @@
     function getRoundedBaseTotal() {
         const roundTo = parseInt(document.getElementById('roundingSelect').value, 10) || 0;
         if (roundTo <= 0) return retailTotal;
-        const roundToTambala = roundTo * 100;
-        return Math.round(retailTotal / roundToTambala) * roundToTambala;
+        const roundToSubunit = roundTo * currentCurrency.subunit_ratio;
+        return Math.round(retailTotal / roundToSubunit) * roundToSubunit;
     }
 
     function updateRoundedTotalDisplay() {
         const rounded = getRoundedBaseTotal();
-        document.getElementById('roundedTotalDisplay').value = 'MK ' + (rounded / 100).toFixed(2);
-        document.getElementById('modalTotalFee').textContent = 'MK ' + (rounded / 100).toFixed(2);
-        document.getElementById('fullAmountDisplay').textContent = 'MK ' + (getFinalTotal() / 100).toFixed(2);
+        document.getElementById('roundedTotalDisplay').value = formatCurrency(rounded);
+        document.getElementById('modalTotalFee').textContent = formatCurrency(rounded);
+        document.getElementById('fullAmountDisplay').textContent = formatCurrency(getFinalTotal());
         updateLoanRemaining();
     }
 
@@ -594,14 +614,14 @@
     });
 
     document.getElementById('discountAmount').addEventListener('input', function() {
-        document.getElementById('fullAmountDisplay').textContent = 'MK ' + (getFinalTotal() / 100).toFixed(2);
+        document.getElementById('fullAmountDisplay').textContent = formatCurrency(getFinalTotal());
         updateLoanRemaining();
     });
 
     function updateLoanRemaining() {
         const paid = parseFloat(document.getElementById('loanAmount').value) || 0;
-        const remaining = Math.max(0, getFinalTotal() / 100 - paid);
-        document.getElementById('loanRemainingDisplay').textContent = 'MK ' + remaining.toFixed(2);
+        const remaining = Math.max(0, getFinalTotal() / currentCurrency.subunit_ratio - paid);
+        document.getElementById('loanRemainingDisplay').textContent = formatCurrency(remaining * currentCurrency.subunit_ratio);
     }
 
     document.getElementById('paymentChannel').addEventListener('change', function() {
@@ -638,21 +658,21 @@
     });
 
     function getFinalTotal() {
-        const discountAmt = Math.round(parseFloat(document.getElementById('discountAmount').value) * 100) || 0;
+        const discountAmt = Math.round(parseFloat(document.getElementById('discountAmount').value) * currentCurrency.subunit_ratio) || 0;
         return Math.max(0, getRoundedBaseTotal() - discountAmt);
     }
 
     document.getElementById('confirmPaymentBtn').addEventListener('click', function() {
         if (!retailVisitId) {
-        alert('Error: No active retail sale found. Please add items first.');
-        this.disabled = false;
-        this.textContent = '✅ Confirm & Complete';
-        return;
-    }
+            alert('Error: No active retail sale found. Please add items first.');
+            this.disabled = false;
+            this.textContent = '✅ Confirm & Complete';
+            return;
+        }
         const isFull = document.querySelector('input[name="payMode"]:checked').value === 'full';
         const finalTotal = getFinalTotal();
 
-        const discountAmt = Math.round(parseFloat(document.getElementById('discountAmount').value) * 100) || 0;
+        const discountAmt = Math.round(parseFloat(document.getElementById('discountAmount').value) * currentCurrency.subunit_ratio) || 0;
         const discountReason = document.getElementById('discountReason').value.trim();
 
         if (discountAmt > 0 && !discountReason) {
@@ -676,7 +696,7 @@
         if (isFull) {
             payload.amount_paid = finalTotal;
         } else {
-            const amountPaid = Math.round(parseFloat(document.getElementById('loanAmount').value) * 100) || 0;
+            const amountPaid = Math.round(parseFloat(document.getElementById('loanAmount').value) * currentCurrency.subunit_ratio) || 0;
             const witness = document.getElementById('loanWitness').value;
             const dueDate = document.getElementById('loanDueDate').value;
 
@@ -731,7 +751,7 @@
         btn.textContent = '✅ Confirm & Complete';
     });
 
-        document.getElementById('sendBackBtn').addEventListener('click', function() {
+    document.getElementById('sendBackBtn').addEventListener('click', function() {
         if (!retailVisitId) {
             alert('Error: Visit ID is missing. Please add items and try again.');
             return;
@@ -828,7 +848,7 @@
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
                         <td><small>${new Date(draft.created_at).toLocaleString()}</small></td>
-                        <td class="text-end">MK ${(draft.total_fee / 100).toFixed(2)}</td>
+                        <td class="text-end">${formatCurrency(draft.total_fee)}</td>
                         <td class="text-end">
                             <button class="btn btn-outline-primary btn-sm resume-draft-btn" data-id="${draft.visit_id}" data-total="${draft.total_fee}">▶ Resume</button>
                             <button class="btn btn-outline-danger btn-sm cancel-draft-btn ms-1" data-id="${draft.visit_id}">✕ Cancel</button>
@@ -879,8 +899,8 @@
         retailTotal = totalFee;
 
         document.getElementById('modalPatientName').textContent = '🏪 Retail Sale';
-        document.getElementById('modalTotalFee').textContent = 'MK ' + (totalFee / 100).toFixed(2);
-        document.getElementById('fullAmountDisplay').textContent = 'MK ' + (totalFee / 100).toFixed(2);
+        document.getElementById('modalTotalFee').textContent = formatCurrency(totalFee);
+        document.getElementById('fullAmountDisplay').textContent = formatCurrency(totalFee);
 
         document.getElementById('discountAmount').value = '';
         document.getElementById('discountReason').value = '';
@@ -915,14 +935,14 @@
                         <tr>
                             <td><span class="badge bg-info text-dark">${item.type}</span></td>
                             <td><strong>${item.name}</strong></td>
-                            <td class="text-end">MK ${(item.unit_price / 100).toFixed(2)}</td>
+                            <td class="text-end">${formatCurrency(item.unit_price)}</td>
                             <td class="text-end">${item.qty}</td>
-                            <td class="text-end">MK ${(item.total / 100).toFixed(2)}</td>
+                            <td class="text-end">${formatCurrency(item.total)}</td>
                         </tr>
                     `;
                 });
                 document.getElementById('invoiceItemsBody').innerHTML = html;
-                document.getElementById('invTotal').textContent = 'MK ' + (retailTotal / 100).toFixed(2);
+                document.getElementById('invTotal').textContent = formatCurrency(retailTotal);
             })
             .catch(err => {
                 console.error(err);

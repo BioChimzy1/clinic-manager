@@ -53,7 +53,7 @@
                                         <tr>
                                             <th>Type</th>
                                             <th>Item</th>
-                                            <th class="text-end">Pack Price (MK)</th>
+                                            <th class="text-end">Pack Price (<span class="currency-symbol-header">MK</span>)</th>
                                             <th style="width: 130px;">Qty</th>
                                             <th class="text-end">Line Total</th>
                                             <th></th>
@@ -67,7 +67,7 @@
                                     <tfoot>
                                         <tr>
                                             <th colspan="4" class="text-end">Total</th>
-                                            <th class="text-end" id="grandTotal">MK 0.00</th>
+                                            <th class="text-end" id="grandTotal"><span class="currency-symbol-total">MK</span> 0.00</th>
                                             <th></th>
                                         </tr>
                                     </tfoot>
@@ -89,23 +89,25 @@
     <script>
     // Get patient_id from URL path
     const urlParams = new URLSearchParams(window.location.search);
-const patientId = urlParams.get('patient_id');
+    const patientId = urlParams.get('patient_id');
 
-if (!patientId) {
-    alert('No patient ID provided. Go back to the queue.');
-    window.location.href = '/queue';
-}
+    if (!patientId) {
+        alert('No patient ID provided. Go back to the queue.');
+        window.location.href = '/queue';
+    }
 
     let allItems = [];
     let selected = new Map();
     let prefillItems = [];
     let prefillDiagnosis = null;
     let prefillReturnReason = null;
+    let currentCurrency = { symbol: 'MK', subunit_ratio: 100 };
 
     document.addEventListener('DOMContentLoaded', async function () {
         const { authenticated } = await CMShell.init({ active: 'visit' });
         if (!authenticated) return;
 
+        await loadCurrency();
         await loadVisitPrefill(patientId);
 
         const searchInput = document.getElementById('itemSearchInput');
@@ -150,7 +152,7 @@ if (!patientId) {
                     }
                 }
 
-                div.innerHTML = `<strong>${cmEscapeHtml(item.name)}</strong> <small class="text-muted">(${item.type}, MK ${(item.price / 100).toFixed(2)} per pack of ${item.defaultQuantity}${qtyLabel})</small> ${statusBadge}`;
+                div.innerHTML = `<strong>${cmEscapeHtml(item.name)}</strong> <small class="text-muted">(${item.type}, ${formatCurrency(item.price)} per pack of ${item.defaultQuantity}${qtyLabel})</small> ${statusBadge}`;
 
                 if (selectable) {
                     div.addEventListener('click', () => addItem(item));
@@ -213,6 +215,24 @@ if (!patientId) {
             }
         });
     });
+
+    async function loadCurrency() {
+        try {
+            const res = await fetch('/api/clinic/currency');
+            if (res.ok) {
+                currentCurrency = await res.json();
+                // Update currency symbols on the page
+                document.querySelectorAll('.currency-symbol-header, .currency-symbol-total')
+                    .forEach(el => el.textContent = currentCurrency.symbol);
+            }
+        } catch (err) {
+            console.error('Failed to load currency:', err);
+        }
+    }
+
+    function formatCurrency(amount) {
+        return `${currentCurrency.symbol} ${(amount / currentCurrency.subunit_ratio).toFixed(2)}`;
+    }
 
     async function loadVisitPrefill(id) {
         try {
@@ -293,7 +313,7 @@ if (!patientId) {
 
         if (selected.size === 0) {
             tbody.appendChild(emptyRow);
-            grandTotalEl.textContent = 'MK 0.00';
+            grandTotalEl.textContent = formatCurrency(0);
             return;
         }
 
@@ -310,11 +330,11 @@ if (!patientId) {
                 <td><strong>${item.name}</strong>
                     <input type="hidden" name="selected_items" value="${id}">
                 </td>
-                <td class="text-end">MK ${(item.price / 100).toFixed(2)} <small class="text-muted">/${item.defaultQuantity}</small></td>
+                <td class="text-end">${formatCurrency(item.price)} <small class="text-muted">/${item.defaultQuantity}</small></td>
                 <td>
                     <input type="number" class="form-control qty-input" value="${qty}" data-id="${id}" min="1" style="font-size: 1.1rem; padding: 0.5rem; min-width: 100px;">
                 </td>
-                <td class="text-end line-total">MK ${(lineTotal / 100).toFixed(2)}</td>
+                <td class="text-end line-total">${formatCurrency(lineTotal)}</td>
                 <td class="text-end">
                     <button type="button" class="btn btn-outline-danger btn-sm remove-item-btn" data-id="${id}">✕</button>
                 </td>
@@ -322,7 +342,7 @@ if (!patientId) {
             tbody.appendChild(tr);
         });
 
-        grandTotalEl.textContent = 'MK ' + (grandTotal / 100).toFixed(2);
+        grandTotalEl.textContent = formatCurrency(grandTotal);
 
         // Wire up qty changes
         tbody.querySelectorAll('.qty-input').forEach(input => {
@@ -337,7 +357,7 @@ if (!patientId) {
                 if (!isNaN(raw) && raw >= 1) {
                     entry.qty = raw;
                     const lineTotal = calculateLineTotal(entry.item, entry.qty);
-                    row.querySelector('.line-total').textContent = 'MK ' + (lineTotal / 100).toFixed(2);
+                    row.querySelector('.line-total').textContent = formatCurrency(lineTotal);
                     updateGrandTotal();
                 }
             });
@@ -369,7 +389,7 @@ if (!patientId) {
         selected.forEach((entry) => {
             grandTotal += calculateLineTotal(entry.item, entry.qty);
         });
-        document.getElementById('grandTotal').textContent = 'MK ' + (grandTotal / 100).toFixed(2);
+        document.getElementById('grandTotal').textContent = formatCurrency(grandTotal);
     }
 
     function cmEscapeHtml(str) {
