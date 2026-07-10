@@ -53,6 +53,59 @@ def require_permission(permission):
 # ------------------------------------------------------------------
 # HELPER FUNCTIONS
 # ------------------------------------------------------------------
+
+def get_clinic_currency(clinic_id):
+    """Get the currency for a specific clinic"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT c.currency_id, cur.code, cur.symbol, cur.subunit_name, cur.subunit_ratio
+        FROM clinics c
+        JOIN currencies cur ON c.currency_id = cur.id
+        WHERE c.id = ?
+    ''', (clinic_id,))
+    row = cursor.fetchone()
+    if row:
+        return {
+            'id': row[0],
+            'code': row[1],
+            'symbol': row[2],
+            'subunit_name': row[3],
+            'subunit_ratio': row[4]
+        }
+    # Fallback to MWK
+    return {'code': 'MWK', 'symbol': 'MK', 'subunit_name': 'Tambala', 'subunit_ratio': 100}
+
+def format_amount(amount, currency=None):
+    """Format an amount in the given currency.
+
+    Amounts are stored in subunits (e.g. tambala, cents) — divide by
+    subunit_ratio to get the main-unit display value.
+    """
+    if currency is None:
+        clinic_id = get_current_clinic_id()
+        if clinic_id:
+            currency = get_clinic_currency(clinic_id)
+        else:
+            currency = {'code': 'MWK', 'symbol': 'MK', 'subunit_ratio': 100}
+
+    amount = amount or 0
+    main_amount = amount / currency['subunit_ratio']
+    formatted = f"{currency['symbol']} {main_amount:,.2f}"
+    return formatted
+
+def get_all_currencies():
+    """Get all active currencies"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, code, name, symbol, subunit_ratio, is_default
+        FROM currencies
+        WHERE is_active = 1
+        ORDER BY is_default DESC, name ASC
+    ''')
+    return cursor.fetchall()
+
 def get_current_clinic_id():
     cached = session.get('clinic_id')
     if cached:
@@ -342,6 +395,19 @@ def build_grouped_transactions(cursor, clinic_id, start_date, end_date, today_st
             visit_rows = cursor.fetchall()
             visits_by_id = {r[0]: r for r in visit_rows}
 
+            cursor.execute(f'''
+                SELECT visit_id, item_name, item_type, quantity
+                FROM visit_items
+                WHERE visit_id IN ({qmarks})
+            ''', top_visit_ids)
+            items_by_visit = defaultdict(list)
+            for v_id, item_name, item_type, quantity in cursor.fetchall():
+                items_by_visit[v_id].append({
+                    'name': item_name,
+                    'category': item_type,
+                    'quantity': quantity
+                })
+
             for vid, latest_date, latest_amount, today_total, latest_ts in page:
                 vrow = visits_by_id.get(vid)
                 if vrow:
@@ -371,6 +437,7 @@ def build_grouped_transactions(cursor, clinic_id, start_date, end_date, today_st
                         'outstanding': outstanding,
                         'status': vrow[4] or '',
                         'is_retail': vrow[5] or 0,
+                        'items_sold': items_by_visit.get(vid, []),
                         'installments': installments_map.get(vid, [])
                     })
 
@@ -404,20 +471,22 @@ def init_db():
     
     # 1. clinics
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS clinics (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            uuid TEXT UNIQUE,
-            clinic_name TEXT NOT NULL,
-            phone TEXT,
-            email TEXT,
-            address TEXT,
-            is_active INTEGER DEFAULT 1,
-            created_at TEXT,
-            updated_at TEXT,
-            is_synced INTEGER DEFAULT 0
-        )
-    ''')
+    CREATE TABLE IF NOT EXISTS clinics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid TEXT UNIQUE,
+        clinic_name TEXT NOT NULL,
+        phone TEXT,
+        email TEXT,
+        address TEXT,
+        currency_id INTEGER DEFAULT 1,
+        is_active INTEGER DEFAULT 1,
+        created_at TEXT,
+        updated_at TEXT,
+        is_synced INTEGER DEFAULT 0
+    )
+''')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_clinics_uuid ON clinics(uuid);')
+
     
     # 2. staff
     cursor.execute('''
@@ -674,6 +743,34 @@ def init_db():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_audit_log_staff ON audit_log(staff_id);')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_audit_log_clinic ON audit_log(clinic_id);')
     
+    # 12. currencies
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS currencies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            subunit_name TEXT NOT NULL,
+            subunit_ratio INTEGER DEFAULT 100,
+            is_active INTEGER DEFAULT 1,
+            is_default INTEGER DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    ''')
+    
+    # Insert default currencies
+    now = datetime.datetime.now().isoformat()
+    cursor.execute('''
+        INSERT OR IGNORE INTO currencies (code, name, symbol, subunit_name, subunit_ratio, is_default, created_at)
+        VALUES 
+        ('MWK', 'Malawian Kwacha', 'MK', 'Tambala', 100, 1, ?),
+        ('USD', 'US Dollar', '$', 'Cent', 100, 0, ?),
+        ('EUR', 'Euro', '€', 'Cent', 100, 0, ?),
+        ('GBP', 'British Pound', '£', 'Pence', 100, 0, ?),
+        ('ZAR', 'South African Rand', 'R', 'Cent', 100, 0, ?)
+    ''', (now, now, now, now, now))
+    
     # AUTO-CREATE DEFAULT ADMIN
     cursor.execute("SELECT COUNT(*) FROM staff")
     staff_count = cursor.fetchone()[0]
@@ -875,6 +972,65 @@ def api_create_clinic():
         'clinic_id': new_clinic_id,
         'clinic_name': clinic_name
     })
+    
+    
+#API ROUTES CURRENCIES 
+    
+@app.route('/api/currencies', methods=['GET'])
+@require_permission('clinic.view')
+def api_currencies():
+    """Get all available currencies"""
+    currencies = get_all_currencies()
+    return jsonify({
+        'currencies': [{
+            'id': c[0],
+            'code': c[1],
+            'name': c[2],
+            'symbol': c[3],
+            'subunit_ratio': c[4],
+            'is_default': c[5]
+        } for c in currencies]
+    })
+
+@app.route('/api/clinic/currency', methods=['GET'])
+@require_permission('clinic.view')
+def api_clinic_currency():
+    """Get current clinic's currency"""
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return jsonify({'error': 'no_clinic'}), 400
+    currency = get_clinic_currency(clinic_id)
+    return jsonify(currency)
+
+@app.route('/api/clinic/currency', methods=['POST'])
+@require_permission('clinic.setup')
+def api_set_clinic_currency():
+    """Change a clinic's currency"""
+    clinic_id = get_current_clinic_id()
+    if not clinic_id:
+        return jsonify({'error': 'no_clinic'}), 400
+
+    data = request.get_json(silent=True) or {}
+    currency_id = data.get('currency_id')
+
+    if not currency_id:
+        return jsonify({'error': 'currency_id required'}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # Confirm the currency actually exists and is active before switching to it,
+    # otherwise the clinic silently ends up pointing at a non-existent currency_id
+    # and every future format_amount()/get_clinic_currency() call falls back to MWK
+    # with no indication anything went wrong.
+    cursor.execute('SELECT id FROM currencies WHERE id = ? AND is_active = 1', (currency_id,))
+    if not cursor.fetchone():
+        return jsonify({'error': 'invalid_currency'}), 400
+
+    cursor.execute('UPDATE clinics SET currency_id = ? WHERE id = ?', (currency_id, clinic_id))
+    conn.commit()
+
+    return jsonify({'success': True, 'currency': get_clinic_currency(clinic_id)})
 
 # ------------------------------------------------------------------
 # API ROUTES - DASHBOARD
@@ -887,6 +1043,7 @@ def api_dashboard():
         return jsonify({'error': 'no_clinic'}), 400
     stats = get_dashboard_data(clinic_id)
     stats['fetched_at'] = datetime.datetime.now().isoformat()
+    stats['currency'] = get_clinic_currency(clinic_id)
     return jsonify(stats)
     
     
@@ -1230,7 +1387,8 @@ def api_price_list():
     return jsonify({
         'items': items,
         'inventory_items': inventory_items,
-        'fetched_at': datetime.datetime.now().isoformat()
+        'fetched_at': datetime.datetime.now().isoformat(),
+        'currency': get_clinic_currency(clinic_id)
     })
 
 @app.route('/api/price_list/add', methods=['POST'])
@@ -1243,7 +1401,13 @@ def api_price_list_add():
     data = request.get_json()
     item_type = data.get('item_type')
     item_name = data.get('item_name')
-    price = int(float(data.get('price', 0)) * 100)  # Fixed: convert to tambala
+    
+    # Get clinic currency to determine subunit ratio
+    currency = get_clinic_currency(clinic_id)
+    subunit_ratio = currency['subunit_ratio']
+    
+    # Convert price to subunit (e.g., 100 for MWK tambala, 100 for USD cents, etc.)
+    price = int(float(data.get('price', 0)) * subunit_ratio)
     quantity = int(data.get('quantity', 1))
 
     if price < 0 or quantity < 0:
@@ -1294,26 +1458,30 @@ def api_price_list_update(item_id):
             return jsonify({'success': False, 'error': 'Item not found.'}), 404
 
         old_price, old_qty, item_type, item_name = row
-
-        # Fixed: convert new_price to tambala
-        new_price_tambala = int(float(new_price) * 100)
+        
+        # Get clinic currency
+        currency = get_clinic_currency(clinic_id)
+        subunit_ratio = currency['subunit_ratio']
+        
+        # Convert new_price to subunit
+        new_price_subunit = int(float(new_price) * subunit_ratio)
 
         cursor.execute('''
             UPDATE price_list 
             SET price = ?, quantity = ?, updated_at = ? 
             WHERE id = ? AND clinic_id = ?
-        ''', (new_price_tambala, new_qty, datetime.datetime.now().isoformat(), item_id, clinic_id))
+        ''', (new_price_subunit, new_qty, datetime.datetime.now().isoformat(), item_id, clinic_id))
 
-        if old_price != new_price_tambala or old_qty != new_qty:
+        if old_price != new_price_subunit or old_qty != new_qty:
             cursor.execute('''
                 INSERT INTO price_history (price_list_id, item_type, item_name, old_price, new_price, old_quantity, new_quantity, changed_by_staff_id, changed_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (item_id, item_type, item_name, old_price, new_price_tambala, old_qty, new_qty, session.get('staff_id'), datetime.datetime.now().isoformat()))
+            ''', (item_id, item_type, item_name, old_price, new_price_subunit, old_qty, new_qty, session.get('staff_id'), datetime.datetime.now().isoformat()))
 
         conn.commit()
         log_audit('UPDATE_PRICE', 'price_list', item_id, 
                   old_value=f"Price: {old_price}, Qty: {old_qty}", 
-                  new_value=f"Price: {new_price_tambala}, Qty: {new_qty}")
+                  new_value=f"Price: {new_price_subunit}, Qty: {new_qty}")
         return jsonify({'success': True})
     except Exception as e:
         conn.rollback()
@@ -1366,7 +1534,8 @@ def api_price_list_history(item_id):
             'new_qty': r[5],
             'changed_at': r[6],
             'changed_by': r[7] or 'System'
-        } for r in rows]
+        } for r in rows],
+        'currency': get_clinic_currency(clinic_id)
     })
 
 # ------------------------------------------------------------------
@@ -1404,6 +1573,26 @@ def api_cashier_list():
         ORDER BY visits.created_at ASC
     ''', (clinic_id,))
     cashier_list = cursor.fetchall()
+
+    visit_ids = [r[0] for r in cashier_list]
+    items_by_visit = {}
+    if visit_ids:
+        qmarks = ','.join(['?'] * len(visit_ids))
+        cursor.execute(f'''
+            SELECT visit_id, item_name, item_type, quantity
+            FROM visit_items
+            WHERE visit_id IN ({qmarks})
+        ''', visit_ids)
+        from collections import defaultdict
+        items_by_visit = defaultdict(list)
+        for v_id, item_name, item_type, quantity in cursor.fetchall():
+            items_by_visit[v_id].append({
+                'name': item_name,
+                'category': item_type,
+                'quantity': quantity
+            })
+
+    currency = get_clinic_currency(clinic_id)
     
     return jsonify({
         'cashier_list': [{
@@ -1419,8 +1608,10 @@ def api_cashier_list():
             'discount_reason': r[9],
             'loan_due_date': r[10],
             'patient_name': r[11],
-            'patient_id': r[12]
-        } for r in cashier_list]
+            'patient_id': r[12],
+            'items_sold': items_by_visit.get(r[0], [])
+        } for r in cashier_list],
+        'currency': currency
     })
 
 @app.route('/api/cashier/view/<int:visit_id>', methods=['GET'])
@@ -1449,13 +1640,16 @@ def api_cashier_view(visit_id):
     ''', (visit_id,))
     items = cursor.fetchall()
     
+    currency = get_clinic_currency(clinic_id)
+    
     return jsonify({
         'patient': visit[4] or '🏪 Retail Sale',
         'diagnosis': visit[2],
         'total': visit[0],
         'paid': visit[1],
         'status': visit[3],
-        'items': [{'type': i[0], 'name': i[1], 'qty': i[2], 'unit_price': i[3], 'total': i[4]} for i in items]
+        'items': [{'type': i[0], 'name': i[1], 'qty': i[2], 'unit_price': i[3], 'total': i[4]} for i in items],
+        'currency': currency
     })
 
 @app.route('/api/cashier/process/<int:visit_id>', methods=['POST'])
@@ -1501,19 +1695,24 @@ def api_cashier_process(visit_id):
 
         rounded_total = data.get('rounded_total')
         round_to = data.get('round_to') or 0
+
+        # Get clinic currency for rounding
+        currency = get_clinic_currency(clinic_id)
+        subunit_ratio = currency['subunit_ratio']
+
         if rounded_total is not None and round_to:
             try:
                 rounded_total = int(rounded_total)
-                round_to_tambala = int(round_to) * 100
+                round_to_subunit = int(round_to) * subunit_ratio
             except (TypeError, ValueError):
                 conn.rollback()
                 return jsonify({'success': False, 'error': 'Invalid rounding value.'}), 400
 
-            if round_to_tambala <= 0 or round_to_tambala % 10000 != 0:
+            if round_to_subunit <= 0 or round_to_subunit % (subunit_ratio * 100) != 0:
                 conn.rollback()
                 return jsonify({'success': False, 'error': 'Invalid rounding step.'}), 400
 
-            expected_rounded = math.floor(total_fee / round_to_tambala + 0.5) * round_to_tambala
+            expected_rounded = math.floor(total_fee / round_to_subunit + 0.5) * round_to_subunit
             if rounded_total != expected_rounded:
                 conn.rollback()
                 return jsonify({'success': False, 'error': 'Rounded total does not match the selected rounding step.'}), 400
@@ -1818,9 +2017,12 @@ def api_loans():
             'patient_name': row[7],
         })
 
+    currency = get_clinic_currency(clinic_id)
+
     return jsonify({
         'loans': loans,
-        'fetched_at': datetime.datetime.now().isoformat()
+        'fetched_at': datetime.datetime.now().isoformat(),
+        'currency': currency
     })
 
 @app.route('/api/loans/details/<int:visit_id>', methods=['GET'])
@@ -1860,6 +2062,8 @@ def api_loan_details(visit_id):
     ''', (visit_id,))
     payments = cursor.fetchall()
     
+    currency = get_clinic_currency(clinic_id)
+    
     return jsonify({
         'visit': {
             'id': visit[0],
@@ -1871,7 +2075,8 @@ def api_loan_details(visit_id):
             'patient_name': visit[6],
             'patient_id': visit[7]
         },
-        'payments': [{'date': p[0], 'amount': p[1]} for p in payments]
+        'payments': [{'date': p[0], 'amount': p[1]} for p in payments],
+        'currency': currency
     })
 
 @app.route('/api/loans/pay/<int:visit_id>', methods=['POST'])
@@ -1975,7 +2180,13 @@ def api_retail_items():
         ORDER BY price_list.item_name
     ''', (today_str, clinic_id, clinic_id))
     items = cursor.fetchall()
-    return jsonify({'items': [{'id': r[0], 'name': r[1], 'type': r[2], 'price': r[3], 'packQty': r[4], 'inventory_id': r[5], 'usableQty': r[6]} for r in items]})
+    
+    currency = get_clinic_currency(clinic_id)
+    
+    return jsonify({
+        'items': [{'id': r[0], 'name': r[1], 'type': r[2], 'price': r[3], 'packQty': r[4], 'inventory_id': r[5], 'usableQty': r[6]} for r in items],
+        'currency': currency
+    })
 
 @app.route('/api/retail/create_draft', methods=['POST'])
 @require_permission('retail.create_draft')
@@ -2082,6 +2293,24 @@ def api_retail_pending():
     ''', (clinic_id,))
     rows = cursor.fetchall()
 
+    visit_ids = [r[0] for r in rows]
+    items_by_visit = {}
+    if visit_ids:
+        qmarks = ','.join(['?'] * len(visit_ids))
+        cursor.execute(f'''
+            SELECT visit_id, item_name, item_type, quantity
+            FROM visit_items
+            WHERE visit_id IN ({qmarks})
+        ''', visit_ids)
+        from collections import defaultdict
+        items_by_visit = defaultdict(list)
+        for v_id, item_name, item_type, quantity in cursor.fetchall():
+            items_by_visit[v_id].append({
+                'name': item_name,
+                'category': item_type,
+                'quantity': quantity
+            })
+
     return jsonify({
         'success': True,
         'pending': [
@@ -2091,6 +2320,7 @@ def api_retail_pending():
                 'amount_paid': r[2],
                 'status': r[3],
                 'created_at': r[4],
+                'items_sold': items_by_visit.get(r[0], [])
             }
             for r in rows
         ]
@@ -2199,6 +2429,8 @@ def api_finance_stats():
     
     net_profit = net_revenue - total_expenses
     
+    currency = get_clinic_currency(clinic_id)
+    
     return jsonify({
         'total_cash': total_cash,
         'outstanding_loans': outstanding_loans,
@@ -2206,7 +2438,8 @@ def api_finance_stats():
         'net_revenue': net_revenue,
         'total_expenses': total_expenses,
         'net_profit': net_profit,
-        'period': period
+        'period': period,
+        'currency': currency
     })
 
 @app.route('/api/finance/transactions', methods=['GET'])
@@ -2231,10 +2464,13 @@ def api_finance_transactions():
         cursor, clinic_id, start_date, end_date, today_str, offset=offset, limit=20
     )
 
+    currency = get_clinic_currency(clinic_id)
+
     return jsonify({
         'transactions': grouped_transactions,
         'has_more': has_more,
-        'next_offset': offset + 20
+        'next_offset': offset + 20,
+        'currency': currency
     })
 
 @app.route('/api/finance/expenses', methods=['GET'])
@@ -2259,8 +2495,11 @@ def api_finance_expenses():
     ''', (clinic_id, start_date[:10], end_date[:10]))
     expenses = cursor.fetchall()
     
+    currency = get_clinic_currency(clinic_id)
+    
     return jsonify({
-        'expenses': [{'id': r[0], 'date': r[1], 'category': r[2], 'description': r[3], 'amount': r[4]} for r in expenses]
+        'expenses': [{'id': r[0], 'date': r[1], 'category': r[2], 'description': r[3], 'amount': r[4]} for r in expenses],
+        'currency': currency
     })
 
 @app.route('/api/finance/expenses/add', methods=['POST'])
@@ -2874,7 +3113,7 @@ def api_visit_create():
 
     conn.commit()
     log_audit('CREATE_VISIT', 'visits', visit_id, 
-              old_value=None, new_value=f"Patient: {p_name}, Total: MK {total_fee/100}")
+              old_value=None, new_value=f"Patient: {p_name}, Total: {format_amount(total_fee)}")
     return jsonify({'success': True, 'visit_id': visit_id})
 
 @app.route('/api/visit/prefill/<int:patient_id>', methods=['GET'])
@@ -2952,6 +3191,8 @@ def api_visit_prefill(patient_id):
             ''', (prev_visit_id,))
             prefill_items = [{'id': r[0], 'qty': r[1]} for r in cursor.fetchall()]
 
+    currency = get_clinic_currency(clinic_id)
+
     return jsonify({
         'patient_id': p_id,
         'patient_name': p_name,
@@ -2971,7 +3212,8 @@ def api_visit_prefill(patient_id):
         } for r in all_priced_items],
         'prefill_diagnosis': prefill_diagnosis,
         'prefill_return_reason': prefill_return_reason,
-        'prefill_items': prefill_items
+        'prefill_items': prefill_items,
+        'currency': currency
     })
 
 # ------------------------------------------------------------------
