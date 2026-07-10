@@ -446,7 +446,7 @@
     });
 
     function getFinalTotal() {
-        const discountAmt = parseFloat(document.getElementById('discountAmount').value) * 100 || 0;
+        const discountAmt = Math.round(parseFloat(document.getElementById('discountAmount').value) * 100) || 0;
         return Math.max(0, getRoundedBaseTotal() - discountAmt);
     }
 
@@ -454,7 +454,7 @@
         const isFull = document.querySelector('input[name="payMode"]:checked').value === 'full';
         const finalTotal = getFinalTotal();
 
-        const discountAmt = parseFloat(document.getElementById('discountAmount').value) * 100 || 0;
+        const discountAmt = Math.round(parseFloat(document.getElementById('discountAmount').value) * 100) || 0;
         const discountReason = document.getElementById('discountReason').value.trim();
 
         if (discountAmt > 0 && !discountReason) {
@@ -478,7 +478,7 @@
         if (isFull) {
             payload.amount_paid = finalTotal;
         } else {
-            const amountPaid = parseFloat(document.getElementById('loanAmount').value) * 100 || 0;
+            const amountPaid = Math.round(parseFloat(document.getElementById('loanAmount').value) * 100) || 0;
             const witness = document.getElementById('loanWitness').value;
             const dueDate = document.getElementById('loanDueDate').value;
 

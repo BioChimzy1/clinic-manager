@@ -1535,7 +1535,7 @@ def api_cashier_process(visit_id):
         ''', (payment_channel, payment_reference, medical_aid_company, visit_id))
         
         if payment_mode == 'full':
-            discount_amount = data.get('discount_amount') or 0
+            discount_amount = int(data.get('discount_amount') or 0)
             discount_reason = (data.get('discount_reason') or '').strip()
 
             if discount_amount < 0:
@@ -1575,10 +1575,10 @@ def api_cashier_process(visit_id):
                 ''', (str(uuid.uuid4()), visit_id, now, collected_now, now))
             
         elif payment_mode == 'loan':
-            amount_paid_now = data.get('amount_paid')
+            amount_paid_now = int(data.get('amount_paid') or 0)
             witness_id = data.get('witness_id')
             loan_due_date = data.get('loan_due_date')
-            discount_amount = data.get('discount_amount') or 0
+            discount_amount = int(data.get('discount_amount') or 0)
             discount_reason = (data.get('discount_reason') or '').strip()
 
             if discount_amount < 0:
