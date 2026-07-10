@@ -286,10 +286,17 @@
 
     function renderPriceList(data, isStale) {
         isOfflineMode = isStale;
-        autocompleteItems = [
+        const combinedItems = [
             ...(data.inventory_items || []),
             ...(data.items || []).map((item) => ({ name: item.item_name, category: item.item_type }))
         ];
+        const seen = new Set();
+        autocompleteItems = combinedItems.filter((item) => {
+            const key = `${item.name.toLowerCase().trim()}|${item.category}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
 
         const banner = document.getElementById('staleBanner');
         const addBtn = document.getElementById('addPriceToggleBtn');
