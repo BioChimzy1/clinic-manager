@@ -7,3 +7,4 @@ clinic_backup_*.db
 changes.txt
 full_changes_summary.txt
 final_working_backup.sql
+changes.txt
