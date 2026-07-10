@@ -27,7 +27,6 @@
 
                         <div class="mb-3" id="staleBanner" style="display: none;"></div>
 
-                        <!-- Collapsible Add Form -->
                         <div class="collapse mb-4" id="addPriceForm">
                             <div class="card card-body bg-light border position-relative">
                                 <button type="button" class="btn-close position-absolute top-0 end-0 m-2" data-bs-toggle="collapse" data-bs-target="#addPriceForm"></button>
@@ -70,7 +69,6 @@
                             </div>
                         </div>
 
-                        <!-- Price List Table -->
                         <div class="mb-3">
                             <input type="text" id="priceSearchInput" class="form-control" placeholder="🔍 Search by item name..." autocomplete="off">
                         </div>
@@ -102,7 +100,6 @@
         </div>
     </main>
 
-    <!-- Price History Modal -->
     <div class="modal fade" id="priceHistoryModal" tabindex="-1">
         <div class="modal-dialog modal-lg">
             <div class="modal-content">
@@ -151,12 +148,10 @@
         loadPriceList();
         window.addEventListener('online', loadPriceList);
 
-        // Table filter
         document.getElementById('priceSearchInput').addEventListener('input', function() {
             applyPriceSearch(this.value.trim().toLowerCase());
         });
 
-        // Autocomplete
         const nameInput = document.getElementById('itemNameInput');
         const results = document.getElementById('results');
         const catSelect = document.getElementById('itemTypeSelect');
@@ -212,13 +207,8 @@
             }
         });
 
-        // Categories that actually exist as inventory items -- these are the
-        // only ones where a price_list entry should ever get linked to a real
-        // stock record. Procedures/Consultation have no inventory equivalent
-        // at all, so they stay free-typed.
         const STOCK_LINKED_CATEGORIES = ['Pharmacy', 'Laboratory', 'Medical Supply'];
 
-        // Add price form submit
         document.getElementById('priceForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             const formData = new FormData(this);
@@ -273,7 +263,6 @@
             const res = await fetch('/api/clinic/currency');
             if (res.ok) {
                 currentCurrency = await res.json();
-                // Update currency symbols on the page
                 document.querySelectorAll('.currency-symbol-form, .currency-symbol-header')
                     .forEach(el => el.textContent = currentCurrency.symbol);
             }
@@ -409,7 +398,6 @@
     }
 
     function attachRowHandlers() {
-        // Save edit buttons
         document.querySelectorAll('.save-edit-btn').forEach(btn => {
             btn.addEventListener('click', function() {
                 const id = this.getAttribute('data-id');
@@ -438,7 +426,6 @@
             });
         });
 
-        // History buttons
         const priceHistoryModal = new bootstrap.Modal(document.getElementById('priceHistoryModal'));
         document.querySelectorAll('.history-btn').forEach(btn => {
             btn.addEventListener('click', function() {
@@ -478,7 +465,6 @@
             });
         });
 
-        // Delete buttons
         document.querySelectorAll('.delete-price-btn').forEach(btn => {
             btn.addEventListener('click', function(e) {
                 e.preventDefault();

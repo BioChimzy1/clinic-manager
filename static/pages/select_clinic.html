@@ -130,7 +130,6 @@
     <script src="/static/js/shell.js"></script>
     <script>
     document.addEventListener('DOMContentLoaded', async function() {
-        // This page requires authentication; redirect if not logged in.
         const { authenticated, session } = await CMShell.init({ active: 'select_clinic' });
         if (!authenticated) return;
 
@@ -139,20 +138,15 @@
         const noMsg = document.getElementById('noClinicsMessage');
         const logoutLink = document.getElementById('logoutLink');
 
-        // Handle logout link explicitly
         logoutLink.addEventListener('click', async (e) => {
             e.preventDefault();
             await fetch('/api/logout', { method: 'POST' });
             window.location.href = '/login';
         });
 
-        // Populate the dropdown from the session data CMShell.init()
-        // already fetched (it calls /api/clinics internally for the nav
-        // switcher) -- no need to hit the endpoint again here.
         const clinics = session.clinics || [];
 
         if (clinics.length === 0) {
-            // No clinics found: show warning, hide form
             form.style.display = 'none';
             noMsg.style.display = 'block';
         } else {
@@ -164,7 +158,6 @@
             });
         }
 
-        // Handle form submission
         form.addEventListener('submit', async function(e) {
             e.preventDefault();
             const clinicId = select.value;
@@ -187,7 +180,6 @@
                 const data = await res.json();
 
                 if (data.success) {
-                    // Redirect to dashboard after successful switch
                     window.location.href = '/dashboard';
                 } else {
                     alert('Error: ' + (data.error || 'Could not switch clinic'));

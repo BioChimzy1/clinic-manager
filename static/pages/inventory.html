@@ -127,7 +127,6 @@
     let isEditing = false;
     let editIntent = false;
 
-    // Form references
     let nameInput, results, catSelect, alertInput, expiryInput, qtyInput, invIdInput;
     let addBtn, editBtn, nameHint, qtyLabel, qtyHint, addModeTitle, editModeTitle;
     let editingItemName, editingBanner, cancelEditBtn, formElement;
@@ -136,7 +135,6 @@
         const { authenticated } = await CMShell.init({ active: 'inventory' });
         if (!authenticated) return;
 
-        // Cache form elements
         nameInput = document.getElementById('itemNameInput');
         results = document.getElementById('results');
         catSelect = document.getElementById('categorySelect');
@@ -156,30 +154,24 @@
         cancelEditBtn = document.getElementById('cancelEditBtn');
         formElement = document.getElementById('addInventoryForm');
 
-        // Button listeners
         document.getElementById('openAddBtn').addEventListener('click', openInAddMode);
         document.getElementById('openEditBtn').addEventListener('click', openInEditShell);
         cancelEditBtn.addEventListener('click', resetForm);
 
-        // Search filter
         document.getElementById('inventorySearchInput').addEventListener('input', function() {
             applyInventorySearch(this.value.trim().toLowerCase());
         });
 
-        // Autocomplete logic
         nameInput.addEventListener('input', handleAutocomplete);
 
-        // Close results when clicking outside
         document.addEventListener('click', (e) => {
             if (!results.contains(e.target) && e.target !== nameInput) {
                 closeResults();
             }
         });
 
-        // Reset form when collapse closes
         formElement.addEventListener('hidden.bs.collapse', resetForm);
 
-        // Inventory form submission
         document.getElementById('inventoryForm').addEventListener('submit', handleInventorySubmit);
 
         loadInventory();
@@ -329,7 +321,6 @@
             return;
         }
 
-        // Add mode
         if (query.length === 0) {
             closeResults();
             return;
@@ -498,7 +489,6 @@
             applyInventorySearch(searchInput.value.trim().toLowerCase());
         }
 
-        // Attach inline handlers
         attachInventoryRowHandlers();
     }
 
@@ -564,7 +554,6 @@
     }
 
     function attachInventoryRowHandlers() {
-        // Edit buttons
         document.querySelectorAll('.inline-edit-btn').forEach(btn => {
             btn.addEventListener('click', function() {
                 const id = this.dataset.id;
@@ -582,7 +571,6 @@
             });
         });
 
-        // Clear stock buttons
         document.querySelectorAll('.clear-stock-btn').forEach(btn => {
             btn.addEventListener('click', function() {
                 if (isOfflineMode) {

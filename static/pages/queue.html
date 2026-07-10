@@ -80,8 +80,8 @@
 
         loadQueue();
         if (navigator.onLine) {
-        renderPendingRegistrations();
-    }
+            renderPendingRegistrations();
+        }
         window.addEventListener('online', () => {
             loadQueue();
             renderPendingRegistrations();
@@ -153,8 +153,8 @@
         }
 
         const actionBtn = p.status === 'Pending'
-        ? `<a href="/static/pages/review_appointment.html?patient_id=${p.id}" class="btn btn-outline-warning btn-sm" style="white-space: nowrap;">📋 Review</a>`
-        : `<a href="/static/pages/visit.html?patient_id=${p.id}" class="btn btn-primary btn-sm" style="white-space: nowrap;">📋 Open</a>`;
+            ? `<a href="/static/pages/review_appointment.html?patient_id=${p.id}" class="btn btn-outline-warning btn-sm" style="white-space: nowrap;">📋 Review</a>`
+            : `<a href="/static/pages/visit.html?patient_id=${p.id}" class="btn btn-primary btn-sm" style="white-space: nowrap;">📋 Open</a>`;
 
         return `
             <tr data-name="${cmEscapeHtml(p.name.toLowerCase())}">
@@ -218,7 +218,6 @@
             tbody.insertBefore(tr, tbody.firstChild);
         });
 
-        // If any records just synced, refresh the queue
         if (all.some((r) => r.synced) && navigator.onLine) {
             loadQueue();
         }

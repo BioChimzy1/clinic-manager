@@ -25,8 +25,6 @@
             box-shadow: 0 .5rem 1rem rgba(0,0,0,.1) !important;
         }
         .card.h-100 { height: 100% !important; }
-        
-        /* Stat numbers */
         .stat-number {
             font-size: 2.2rem;
             font-weight: 700;
@@ -36,8 +34,6 @@
             font-size: 0.85rem;
             color: var(--charcoal-soft);
         }
-        
-        /* Border colors */
         .border-primary { border-color: var(--terracotta) !important; }
         .border-success { border-color: var(--teal) !important; }
         .border-warning { border-color: #e8b84b !important; }
@@ -45,10 +41,8 @@
         .border-danger { border-color: #c85a5a !important; }
         .border-secondary { border-color: var(--charcoal-soft) !important; }
         .border-dark { border-color: var(--teal-deep) !important; }
-        
         .text-warning { color: #e8b84b !important; }
         .text-info { color: #4a9e9e !important; }
-        
         .badge.bg-success { background-color: var(--teal) !important; }
         .badge.bg-danger { background-color: #c85a5a !important; }
         .badge.bg-warning { background-color: #e8b84b !important; color: var(--charcoal) !important; }
@@ -59,7 +53,7 @@
     <main>
         <div class="container">
             <div class="app-container">
-                <!-- Welcome Banner -->
+                <div id="cmFlashContainer"></div>
                 <div class="row g-4 mb-4">
                     <div class="col-12">
                         <div class="alert alert-success d-flex justify-content-between align-items-center mb-0">
@@ -70,17 +64,12 @@
                         </div>
                     </div>
                 </div>
-
-                <!-- Stale data warning (hidden by default) -->
                 <div class="row g-4 mb-3">
                     <div class="col-12">
                         <div id="dashboardStaleBanner" class="alert alert-warning py-2 px-3 mb-0" style="display: none;"></div>
                     </div>
                 </div>
-
-                <!-- Stats Grid -->
                 <div class="row g-4" id="dashboardStatsGrid">
-                    <!-- 1. ACTIVE QUEUE -->
                     <div class="col-md-6 col-lg-4" data-role-allow="admin,doctor,pharmacist,cashier,receptionist,nurse,guard">
                         <a href="/queue" class="card h-100 shadow-sm p-3 border-start border-4 border-primary text-decoration-none text-dark dashboard-stat-card">
                             <div class="d-flex align-items-center justify-content-between mb-2">
@@ -104,8 +93,6 @@
                             <div class="text-center mt-2"><span class="badge bg-secondary" id="statTotalQueue">Loading...</span></div>
                         </a>
                     </div>
-
-                    <!-- 2. REGISTER PATIENT -->
                     <div class="col-md-6 col-lg-4" data-role-allow="admin,doctor,receptionist">
                         <div class="card h-100 shadow-sm text-center p-3 border-start border-4 border-success">
                             <h2 class="display-4 text-success mb-2">➕</h2>
@@ -114,8 +101,6 @@
                             <a href="/register" class="btn btn-success btn-sm stretched-link">Register</a>
                         </div>
                     </div>
-
-                    <!-- 3. APPOINTMENTS -->
                     <div class="col-md-6 col-lg-4" data-role-allow="admin,doctor,pharmacist,cashier,receptionist,nurse">
                         <a href="/appointments" class="card h-100 shadow-sm p-3 border-start border-4 border-secondary text-decoration-none text-dark dashboard-stat-card">
                             <div class="d-flex align-items-center justify-content-between mb-2">
@@ -128,8 +113,6 @@
                             </div>
                         </a>
                     </div>
-
-                    <!-- 4. INVENTORY -->
                     <div class="col-md-6 col-lg-4" data-role-allow="admin,doctor,pharmacist,cashier,nurse">
                         <a href="/inventory" class="card h-100 shadow-sm p-3 border-start border-4 border-warning text-decoration-none text-dark dashboard-stat-card">
                             <div class="d-flex align-items-center justify-content-between mb-2">
@@ -152,8 +135,6 @@
                             </div>
                         </a>
                     </div>
-
-                    <!-- 5. PRICE LIST -->
                     <div class="col-md-6 col-lg-4" data-role-allow="admin,doctor,pharmacist,cashier">
                         <a href="/price_list" class="card h-100 shadow-sm p-3 border-start border-4 border-info text-decoration-none text-dark dashboard-stat-card">
                             <div class="d-flex align-items-center justify-content-between mb-2">
@@ -166,8 +147,6 @@
                             </div>
                         </a>
                     </div>
-
-                    <!-- 6. CASHIER -->
                     <div class="col-md-6 col-lg-4" data-role-allow="admin,cashier,doctor">
                         <a href="/cashier" class="card h-100 shadow-sm p-3 border-start border-4 border-danger text-decoration-none text-dark dashboard-stat-card">
                             <div class="d-flex align-items-center justify-content-between mb-2">
@@ -180,8 +159,6 @@
                             </div>
                         </a>
                     </div>
-
-                    <!-- 6b. LOANS -->
                     <div class="col-md-6 col-lg-4" data-role-allow="admin,cashier,doctor,receptionist">
                         <a href="/loans" class="card h-100 shadow-sm p-3 border-start border-4 border-info text-decoration-none text-dark dashboard-stat-card">
                             <div class="d-flex align-items-center justify-content-between mb-2">
@@ -194,8 +171,6 @@
                             </div>
                         </a>
                     </div>
-
-                    <!-- 7. RETAIL -->
                     <div class="col-md-6 col-lg-4" data-role-allow="admin,pharmacist,cashier,doctor">
                         <a href="/retail" class="card h-100 shadow-sm p-3 border-start border-4 border-success text-decoration-none text-dark dashboard-stat-card">
                             <div class="d-flex align-items-center justify-content-between mb-2">
@@ -208,8 +183,6 @@
                             </div>
                         </a>
                     </div>
-
-                    <!-- 8. FINANCE -->
                     <div class="col-md-6 col-lg-4" data-role-allow="admin,doctor,cashier">
                         <a href="/finance" class="card h-100 shadow-sm p-3 border-start border-4 border-dark text-decoration-none text-dark dashboard-stat-card">
                             <div class="d-flex align-items-center justify-content-between mb-2">
@@ -224,8 +197,6 @@
                             </div>
                         </a>
                     </div>
-
-                    <!-- 9. CREATE NEW CLINIC (Admin Only) -->
                     <div class="col-md-6 col-lg-4" id="createClinicCard" style="display: none;">
                         <div class="card h-100 shadow-sm p-3 border-start border-4 border-secondary">
                             <div class="d-flex align-items-center justify-content-between mb-2">
@@ -259,11 +230,9 @@
         if (!authenticated) return;
         sessionData = session;
 
-        // Set Welcome message
         const role = session.role || 'Staff';
         document.getElementById('welcomeMessage').textContent = `Welcome back, ${role}!`;
 
-        // Show Create Clinic card if Admin
         if (role.toLowerCase() === 'admin') {
             document.getElementById('createClinicCard').style.display = 'block';
         }
@@ -271,7 +240,6 @@
         loadDashboard();
         window.addEventListener('online', loadDashboard);
 
-        // Handle Create Clinic Form
         document.getElementById('createClinicForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             const btn = document.getElementById('createClinicBtn');
@@ -291,7 +259,6 @@
                 });
                 const data = await res.json();
                 if (data.success) {
-                    // Force a reload to see the new clinic in the nav switcher
                     window.location.reload();
                 } else {
                     alert('Error: ' + (data.error || 'Could not create clinic'));
@@ -345,13 +312,11 @@
         document.getElementById('statCashierCount').textContent = data.cashier_count ?? '—';
         document.getElementById('statLoansCount').textContent = data.loans_count ?? '—';
 
-        // Format currency with dynamic symbol
         const currency = data.currency || { symbol: 'MK', subunit_ratio: 100 };
         document.getElementById('currencySymbol').textContent = currency.symbol;
         document.getElementById('statTodayCashAmount').textContent = 
             CMShell.formatCurrency(data.today_cash_collected, currency);
 
-        // Lock the "Create Clinic" button if offline
         const createClinicBtn = document.getElementById('createClinicBtn');
         if (createClinicBtn) {
             createClinicBtn.disabled = isStale;
