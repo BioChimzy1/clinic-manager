@@ -1251,7 +1251,10 @@ def api_price_list_add():
     
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT id FROM inventory WHERE item_name = ? AND category = ? AND is_active = 1", (item_name, item_type))
+    cursor.execute(
+        "SELECT id FROM inventory WHERE item_name = ? AND category = ? AND clinic_id = ? AND is_active = 1",
+        (item_name, item_type, clinic_id)
+    )
     inv_row = cursor.fetchone()
     inventory_id = inv_row[0] if inv_row else None
     
