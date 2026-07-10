@@ -15,12 +15,15 @@ app.secret_key = os.environ.get('SECRET_KEY', 'dev-only-fallback-do-not-use-in-p
 
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATABASE = os.path.join(BASE_DIR, 'clinic.db')
+
 # ------------------------------------------------------------------
 # DATABASE CONNECTION CONTEXT
 # ------------------------------------------------------------------
 def get_db():
     if 'db' not in g:
-        g.db = sqlite3.connect('clinic.db')
+        g.db = sqlite3.connect(DATABASE)
         g.db.execute("PRAGMA foreign_keys = ON;")
         g.db.row_factory = sqlite3.Row
     return g.db
@@ -395,7 +398,7 @@ def log_audit(action, table_name, record_id, old_value=None, new_value=None):
 # DATABASE INITIALIZATION
 # ------------------------------------------------------------------
 def init_db():
-    conn = sqlite3.connect('clinic.db')
+    conn = sqlite3.connect(DATABASE)
     cursor = conn.cursor()
     cursor.execute("PRAGMA foreign_keys = ON;")
     
@@ -697,7 +700,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-if not os.path.exists('clinic.db'):
+if not os.path.exists(DATABASE):
     init_db()
 
 # ------------------------------------------------------------------
