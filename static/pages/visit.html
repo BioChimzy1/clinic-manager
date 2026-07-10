@@ -152,7 +152,7 @@
                     }
                 }
 
-                div.innerHTML = `<strong>${cmEscapeHtml(item.name)}</strong> <small class="text-muted">(${item.type}, ${formatCurrency(item.price)} per pack of ${item.defaultQuantity}${qtyLabel})</small> ${statusBadge}`;
+                div.innerHTML = `<strong>${cmEscapeHtml(item.name)}</strong> <small class="text-muted">(${item.type}, ${CMShell.formatCurrency(item.price,currentCurrency)} per pack of ${item.defaultQuantity}${qtyLabel})</small> ${statusBadge}`;
 
                 if (selectable) {
                     div.addEventListener('click', () => addItem(item));
@@ -230,9 +230,6 @@
         }
     }
 
-    function formatCurrency(amount) {
-        return `${currentCurrency.symbol} ${(amount / currentCurrency.subunit_ratio).toFixed(2)}`;
-    }
 
     async function loadVisitPrefill(id) {
         try {
@@ -313,7 +310,7 @@
 
         if (selected.size === 0) {
             tbody.appendChild(emptyRow);
-            grandTotalEl.textContent = formatCurrency(0);
+            grandTotalEl.textContent = CMShell.formatCurrency(0,currentCurrency);
             return;
         }
 
@@ -330,11 +327,11 @@
                 <td><strong>${item.name}</strong>
                     <input type="hidden" name="selected_items" value="${id}">
                 </td>
-                <td class="text-end">${formatCurrency(item.price)} <small class="text-muted">/${item.defaultQuantity}</small></td>
+                <td class="text-end">${CMShell.formatCurrency(item.price,currentCurrency)} <small class="text-muted">/${item.defaultQuantity}</small></td>
                 <td>
                     <input type="number" class="form-control qty-input" value="${qty}" data-id="${id}" min="1" style="font-size: 1.1rem; padding: 0.5rem; min-width: 100px;">
                 </td>
-                <td class="text-end line-total">${formatCurrency(lineTotal)}</td>
+                <td class="text-end line-total">${CMShell.formatCurrency(lineTotal,currentCurrency)}</td>
                 <td class="text-end">
                     <button type="button" class="btn btn-outline-danger btn-sm remove-item-btn" data-id="${id}">✕</button>
                 </td>
@@ -342,7 +339,7 @@
             tbody.appendChild(tr);
         });
 
-        grandTotalEl.textContent = formatCurrency(grandTotal);
+        grandTotalEl.textContent = CMShell.formatCurrency(grandTotal,currentCurrency);
 
         // Wire up qty changes
         tbody.querySelectorAll('.qty-input').forEach(input => {
@@ -357,7 +354,7 @@
                 if (!isNaN(raw) && raw >= 1) {
                     entry.qty = raw;
                     const lineTotal = calculateLineTotal(entry.item, entry.qty);
-                    row.querySelector('.line-total').textContent = formatCurrency(lineTotal);
+                    row.querySelector('.line-total').textContent = CMShell.formatCurrency(lineTotal,currentCurrency);
                     updateGrandTotal();
                 }
             });
@@ -389,7 +386,7 @@
         selected.forEach((entry) => {
             grandTotal += calculateLineTotal(entry.item, entry.qty);
         });
-        document.getElementById('grandTotal').textContent = formatCurrency(grandTotal);
+        document.getElementById('grandTotal').textContent = CMShell.formatCurrency(grandTotal,currentCurrency);
     }
 
     function cmEscapeHtml(str) {

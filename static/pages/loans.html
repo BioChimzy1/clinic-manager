@@ -93,10 +93,6 @@
         }
     }
 
-    function formatCurrency(amount) {
-        return `${currentCurrency.symbol} ${(amount / currentCurrency.subunit_ratio).toFixed(2)}`;
-    }
-
     async function loadLoans() {
         try {
             const res = await fetch('/api/loans');
@@ -135,9 +131,9 @@
             return `
                 <tr data-name="${cmEscapeHtml((loan.patient_name || '🏪 retail sale').toLowerCase())}">
                     <td><strong>${cmEscapeHtml(displayName)}</strong>${typeBadge}</td>
-                    <td class="text-end">${formatCurrency(loan.total_fee)}</td>
-                    <td class="text-end">${formatCurrency(loan.amount_paid)}</td>
-                    <td class="text-end text-danger fw-bold">${formatCurrency(loan.balance)}</td>
+                    <td class="text-end">${CMShell.formatCurrency(loan.total_fee,currentCurrency)}</td>
+                    <td class="text-end">${CMShell.formatCurrency(loan.amount_paid,currentCurrency)}</td>
+                    <td class="text-end text-danger fw-bold">${CMShell.formatCurrency(loan.balance,currentCurrency)}</td>
                     <td><small>${cmEscapeHtml(loan.witness || '—')}</small></td>
                     <td>${dueCell}</td>
                     <td class="text-end">

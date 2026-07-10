@@ -540,7 +540,7 @@
             <tr data-name="${cmEscapeHtml(item.name.toLowerCase())}">
                 <td><span class="badge bg-secondary">${cmEscapeHtml(item.category)}</span></td>
                 <td><strong>${cmEscapeHtml(item.name)}</strong></td>
-                <td>${item.qty}</td>
+                <td>${CMShell.formatNumber(item.qty)}</td>
                 <td><small class="text-muted">${item.expiry || ''}</small></td>
                 <td>${stockBadge}</td>
                 <td>${expiryBadge}</td>

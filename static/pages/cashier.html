@@ -248,10 +248,6 @@
         }
     }
 
-    function formatCurrency(amount) {
-        return `${currentCurrency.symbol} ${(amount / currentCurrency.subunit_ratio).toFixed(2)}`;
-    }
-
     async function loadCashierList() {
         try {
             const res = await fetch('/api/cashier/list');
@@ -280,8 +276,8 @@
             <tr data-name="${cmEscapeHtml(visit.patient_name.toLowerCase())}">
                 <td><strong>${cmEscapeHtml(visit.patient_name)}</strong></td>
                 <td><small class="text-muted">${cmEscapeHtml(visit.diagnosis)}</small></td>
-                <td class="text-end">${formatCurrency(visit.total_fee)}</td>
-                <td class="text-end">${formatCurrency(visit.amount_paid)}</td>
+                <td class="text-end">${CMShell.formatCurrency(visit.total_fee,currentCurrency)}</td>
+                <td class="text-end">${CMShell.formatCurrency(visit.amount_paid,currentCurrency)}</td>
                 <td class="text-end">
                     <button class="btn btn-primary btn-sm process-payment-btn"
                             data-id="${visit.id}"
@@ -323,8 +319,8 @@
                 currentPatientName = this.dataset.patient;
 
                 document.getElementById('modalPatientName').textContent = currentPatientName;
-                document.getElementById('modalTotalFee').textContent = formatCurrency(currentTotal);
-                document.getElementById('fullAmountDisplay').textContent = formatCurrency(currentTotal);
+                document.getElementById('modalTotalFee').textContent = CMShell.formatCurrency(currentTotal,currentCurrency);
+                document.getElementById('fullAmountDisplay').textContent = CMShell.formatCurrency(currentTotal,currentCurrency);
 
                 // Reset form
                 document.getElementById('discountAmount').value = '';
@@ -356,14 +352,14 @@
                                 <tr>
                                     <td><span class="badge bg-info text-dark">${item.type}</span></td>
                                     <td><strong>${item.name}</strong></td>
-                                    <td class="text-end">${formatCurrency(item.unit_price)}</td>
+                                    <td class="text-end">${CMShell.formatCurrency(item.unit_price,currentCurrency)}</td>
                                     <td class="text-end">${item.qty}</td>
-                                    <td class="text-end">${formatCurrency(item.total)}</td>
+                                    <td class="text-end">${CMShell.formatCurrency(item.total,currentCurrency)}</td>
                                 </tr>
                             `;
                         });
                         document.getElementById('invoiceItemsBody').innerHTML = html;
-                        document.getElementById('invTotal').textContent = formatCurrency(data.total);
+                        document.getElementById('invTotal').textContent = CMShell.formatCurrency(data.total,currentCurrency);
                     })
                     .catch(() => {
                         document.getElementById('invoiceItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-danger">Error loading invoice.</td></tr>';
@@ -403,9 +399,9 @@
 
     function updateRoundedTotalDisplay() {
         const rounded = getRoundedBaseTotal();
-        document.getElementById('roundedTotalDisplay').value = formatCurrency(rounded);
-        document.getElementById('modalTotalFee').textContent = formatCurrency(rounded);
-        document.getElementById('fullAmountDisplay').textContent = formatCurrency(getFinalTotal());
+        document.getElementById('roundedTotalDisplay').value = CMShell.formatCurrency(rounded,currentCurrency);
+        document.getElementById('modalTotalFee').textContent = CMShell.formatCurrency(rounded,currentCurrency);
+        document.getElementById('fullAmountDisplay').textContent = CMShell.formatCurrency(getFinalTotal(),currentCurrency);
         updateLoanRemaining();
     }
 
@@ -423,14 +419,14 @@
     });
 
     document.getElementById('discountAmount').addEventListener('input', function() {
-        document.getElementById('fullAmountDisplay').textContent = formatCurrency(getFinalTotal());
+        document.getElementById('fullAmountDisplay').textContent = CMShell.formatCurrency(getFinalTotal(),currentCurrency);
         updateLoanRemaining();
     });
 
     function updateLoanRemaining() {
         const paid = parseFloat(document.getElementById('loanAmount').value) || 0;
         const remaining = Math.max(0, getFinalTotal() / currentCurrency.subunit_ratio - paid);
-        document.getElementById('loanRemainingDisplay').textContent = formatCurrency(remaining * currentCurrency.subunit_ratio);
+        document.getElementById('loanRemainingDisplay').textContent = CMShell.formatCurrency(remaining * currentCurrency.subunit_ratio,currentCurrency);
     }
 
     document.getElementById('paymentChannel').addEventListener('change', function() {

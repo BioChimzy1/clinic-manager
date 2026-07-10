@@ -146,17 +146,14 @@ const CMShell = (function () {
         const currencySymbolNav = document.getElementById('currencySymbolNav');
         
         if (currencyDropdownMenu && session.clinic_id) {
-            // 1. Fetch current clinic currency to set the nav symbol
-            fetch('/api/clinic/currency')
-                .then(res => res.json())
-                .then(currentCurrency => {
-                    if(currencySymbolNav) {
-                        currencySymbolNav.textContent = currentCurrency.symbol;
-                    }
-                })
-                .catch(() => {
-                    if(currencySymbolNav) currencySymbolNav.textContent = 'MK'; // fallback
-                });
+            // 1. Use already-fetched window.__currency to set the nav symbol
+            if (currencySymbolNav) {
+                if (window.__currency) {
+                    currencySymbolNav.textContent = window.__currency.symbol;
+                } else {
+                    currencySymbolNav.textContent = 'MK'; // fallback
+                }
+            }
 
             // 2. Fetch list of all currencies and populate dropdown
             fetch('/api/currencies')
@@ -325,6 +322,16 @@ const CMShell = (function () {
         } catch (err) {
             // Non-fatal -- clinic switcher just won't render.
         }
+        
+        // --- NEW: FETCH AND SET GLOBAL CURRENCY ---
+        try {
+            const currencyRes = await fetch('/api/clinic/currency');
+            if (currencyRes.ok) {
+                window.__currency = await currencyRes.json();
+            }
+        } catch (err) {
+            // If fetch fails, leave it undefined so the helper falls back to MK
+        }
 
         const session = {
             staff_id: verify.staff_id,
@@ -344,5 +351,27 @@ const CMShell = (function () {
         return { authenticated: true, session };
     }
 
-    return { init, flash, escapeHtml };
+    // --- NEW FORMATTING HELPERS ---
+    function formatNumber(num) {
+        if (num === null || num === undefined || isNaN(num)) return '—';
+        // toLocaleString is best practice for commas (e.g., 1000 -> 1,000)
+        return Number(num).toLocaleString('en-US');
+    }
+
+    function formatCurrency(amount, currency) {
+        if (currency === undefined) {
+            // Use current currency from session if available, fallback to MK
+            currency = window.__currency || { symbol: 'MK', subunit_ratio: 100 };
+        }
+        if (currency === null || currency.subunit_ratio === undefined) {
+            currency = { symbol: 'MK', subunit_ratio: 100 };
+        }
+        amount = Number(amount || 0);
+        const ratio = Number(currency.subunit_ratio) || 100; 
+        const mainAmount = amount / ratio;
+        return `${currency.symbol} ${mainAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+
+    // Return the public API
+    return { init, flash, escapeHtml, formatNumber, formatCurrency };
 })();

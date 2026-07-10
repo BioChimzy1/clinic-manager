@@ -142,9 +142,6 @@
         }
     }
 
-    function formatCurrency(amount) {
-        return `${currentCurrency.symbol} ${(amount / currentCurrency.subunit_ratio).toFixed(2)}`;
-    }
 
     async function loadLoanDetails(id) {
         try {
@@ -163,12 +160,12 @@
         const payments = data.payments || [];
 
         document.getElementById('loanSummary').textContent = 
-            `${visit.patient_name || 'Retail Sale'} · Total: ${formatCurrency(visit.total_fee)} · Paid: ${formatCurrency(visit.amount_paid)} · Balance: ${formatCurrency(visit.total_fee - visit.amount_paid)}`;
+            `${visit.patient_name || 'Retail Sale'} · Total: ${CMShell.formatCurrency(visit.total_fee,currentCurrency)} · Paid: ${CMShell.formatCurrency(visit.amount_paid,currentCurrency)} · Balance: ${CMShell.formatCurrency(visit.total_fee - visit.amount_paid,currentCurrency)}`;
 
         document.getElementById('loanPatient').textContent = visit.patient_name || '🏪 Retail Sale';
-        document.getElementById('loanTotal').textContent = formatCurrency(visit.total_fee);
-        document.getElementById('loanPaid').textContent = formatCurrency(visit.amount_paid);
-        document.getElementById('loanBalance').textContent = formatCurrency(visit.total_fee - visit.amount_paid);
+        document.getElementById('loanTotal').textContent = CMShell.formatCurrency(visit.total_fee,currentCurrency);
+        document.getElementById('loanPaid').textContent = CMShell.formatCurrency(visit.amount_paid,currentCurrency);
+        document.getElementById('loanBalance').textContent = CMShell.formatCurrency(visit.total_fee - visit.amount_paid,currentCurrency);
         document.getElementById('loanWitness').textContent = visit.loan_witness || '—';
         document.getElementById('loanDueDate').textContent = visit.loan_due_date || 'No due date set';
         document.getElementById('loanStatus').innerHTML = `<span class="badge bg-info text-dark">${visit.status}</span>`;
@@ -188,7 +185,7 @@
             tbody.innerHTML = payments.map(p => `
                 <tr>
                     <td><small>${p.date ? p.date.slice(0, 10) : ''}</small></td>
-                    <td class="text-end">${formatCurrency(p.amount)}</td>
+                    <td class="text-end">${CMShell.formatCurrency(p.amount,currentCurrency)}</td>
                 </tr>
             `).join('');
         }
@@ -208,7 +205,7 @@
                 return;
             }
 
-            if (!confirm('Record payment of ' + formatCurrency(amount) + '?')) {
+            if (!confirm('Record payment of ' + CMShell.formatCurrency(amount,currentCurrency) + '?')) {
                 return;
             }
 

@@ -281,9 +281,6 @@
         }
     }
 
-    function formatCurrency(amount) {
-        return `${currentCurrency.symbol} ${(amount / currentCurrency.subunit_ratio).toFixed(2)}`;
-    }
 
     async function loadFinance(period) {
         try {
@@ -297,15 +294,15 @@
     }
 
     function renderFinanceStats(data) {
-        document.getElementById('statTotalCash').textContent = formatCurrency(data.total_cash);
-        document.getElementById('statOutstandingLoans').textContent = formatCurrency(data.outstanding_loans);
-        document.getElementById('statDiscounts').textContent = formatCurrency(data.total_discounts);
-        document.getElementById('statNetRevenue').textContent = formatCurrency(data.net_revenue);
-        document.getElementById('statExpenses').textContent = formatCurrency(data.total_expenses);
+        document.getElementById('statTotalCash').textContent = CMShell.formatCurrency(data.total_cash,currentCurrency);
+        document.getElementById('statOutstandingLoans').textContent = CMShell.formatCurrency(data.outstanding_loans,currentCurrency);
+        document.getElementById('statDiscounts').textContent = CMShell.formatCurrency(data.total_discounts,currentCurrency);
+        document.getElementById('statNetRevenue').textContent = CMShell.formatCurrency(data.net_revenue,currentCurrency);
+        document.getElementById('statExpenses').textContent = CMShell.formatCurrency(data.total_expenses,currentCurrency);
         
         const profit = data.net_profit;
         const profitEl = document.getElementById('statNetProfit');
-        profitEl.textContent = formatCurrency(profit);
+        profitEl.textContent = CMShell.formatCurrency(profit,currentCurrency);
         profitEl.className = profit >= 0 ? 'mb-0 text-success' : 'mb-0 text-danger';
     }
 
@@ -350,15 +347,15 @@
             tr.innerHTML = `
                 <td>
                     <strong>${cmEscapeHtml(gt.patient)}</strong>
-                    ${gt.discount_amount > 0 ? `<br><small class="text-muted">Discount: ${formatCurrency(gt.discount_amount)}</small>` : ''}
+                    ${gt.discount_amount > 0 ? `<br><small class="text-muted">Discount: ${CMShell.formatCurrency(gt.discount_amount,currentCurrency)}</small>` : ''}
                     ${gt.is_retail ? '<span class="badge bg-success ms-1">Retail</span>' : ''}
                 </td>
                 <td>
                     <small>${summaryLabel}</small>
-                    <br><small class="text-muted">${formatCurrency(gt.summary_amount)}</small>
+                    <br><small class="text-muted">${CMShell.formatCurrency(gt.summary_amount,currentCurrency)}</small>
                 </td>
-                <td class="text-end">${formatCurrency(gt.total_fee)}</td>
-                <td class="text-end text-danger fw-bold">${formatCurrency(gt.outstanding)}</td>
+                <td class="text-end">${CMShell.formatCurrency(gt.total_fee,currentCurrency)}</td>
+                <td class="text-end text-danger fw-bold">${CMShell.formatCurrency(gt.outstanding,currentCurrency)}</td>
                 <td>
                     <span class="badge ${gt.status === 'Paid' ? 'bg-success' : 'bg-info text-dark'}">
                         ${gt.status}
@@ -402,7 +399,7 @@
                 
                 let instHtml = '<td colspan="6" style="padding: .5rem 1rem;"><div class="small"><strong>Payment History</strong><div class="table-responsive mt-2"><table class="table table-sm mb-0"><thead><tr><th>Date</th><th class="text-end">Amount</th></tr></thead><tbody>';
                 gt.installments.forEach(inst => {
-                    instHtml += `<tr><td><small>${inst.date}</small></td><td class="text-end">${formatCurrency(inst.amount)}</td></tr>`;
+                    instHtml += `<tr><td><small>${inst.date}</small></td><td class="text-end">${CMShell.formatCurrency(inst.amount,currentCurrency)}</td></tr>`;
                 });
                 instHtml += '</tbody></table></div></div></td>';
                 instRow.innerHTML = instHtml;
@@ -464,7 +461,7 @@
                 <td><small>${exp.date ? exp.date.slice(0, 10) : ''}</small></td>
                 <td><span class="badge bg-secondary">${cmEscapeHtml(exp.category)}</span></td>
                 <td><small>${cmEscapeHtml(exp.description)}</small></td>
-                <td class="text-end text-danger">${formatCurrency(exp.amount)}</td>
+                <td class="text-end text-danger">${CMShell.formatCurrency(exp.amount,currentCurrency)}</td>
                 <td class="text-end">
                     <button class="btn btn-outline-danger btn-sm py-0 px-2 delete-expense-btn" data-id="${exp.id}">✕</button>
                 </td>

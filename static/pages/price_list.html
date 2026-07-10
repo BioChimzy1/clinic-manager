@@ -282,10 +282,6 @@
         }
     }
 
-    function formatCurrency(amount) {
-        return `${currentCurrency.symbol} ${(amount / currentCurrency.subunit_ratio).toFixed(2)}`;
-    }
-
     async function loadPriceList() {
         try {
             const res = await fetch('/api/price_list');
@@ -358,16 +354,16 @@
         if (item.no_stock_concept === 1) {
             stockBadge = '';
         } else if (item.usable_qty > 0 && item.expired_qty === 0) {
-            stockBadge = `<span class="badge bg-success ms-1">📦 ${item.usable_qty} in stock</span>`;
+            stockBadge = `<span class="badge bg-success ms-1">📦 ${CMShell.formatNumber(item.usable_qty)} in stock</span>`;
         } else if (item.usable_qty > 0 && item.expired_qty > 0) {
-            stockBadge = `<span class="badge bg-success ms-1">📦 ${item.usable_qty} in stock</span> <span class="badge bg-warning text-dark ms-1">⚠️ ${item.expired_qty} expired</span>`;
+            stockBadge = `<span class="badge bg-success ms-1">📦 ${CMShell.formatNumber(item.usable_qty)} in stock</span> <span class="badge bg-warning text-dark ms-1">⚠️ ${CMShell.formatNumber(item.expired_qty)} expired</span>`;
         } else if (item.usable_qty === 0 && item.expired_qty > 0) {
-            stockBadge = `<span class="badge" style="background-color: #6f0000; color: #fff;">⛔ ${item.expired_qty} expired, 0 usable</span>`;
+            stockBadge = `<span class="badge" style="background-color: #6f0000; color: #fff;">⛔ ${CMShell.formatNumber(item.expired_qty)} expired, 0 usable</span>`;
         } else {
             stockBadge = '<span class="badge bg-secondary ms-1">🚫 Out of stock</span>';
         }
 
-        const priceFormatted = formatCurrency(item.price);
+        const priceFormatted = CMShell.formatCurrency(item.price,currentCurrency);
         const disabledAttr = isOfflineMode ? 'disabled title="Connect to the internet to edit"' : '';
 
         const actions = isOfflineMode
@@ -387,7 +383,7 @@
                 <td><strong>${cmEscapeHtml(item.item_name)}</strong> ${stockBadge}</td>
                 <td class="text-end">
                     <input type="number" step="0.01" class="form-control form-control-sm d-inline-block edit-price"
-       style="width: 100px;" value="${(item.price / currentCurrency.subunit_ratio).toFixed(2)}" data-id="${item.id}" min="0" ${disabledAttr}>
+                           style="width: 100px;" value="${(item.price / currentCurrency.subunit_ratio).toFixed(2)}" data-id="${item.id}" min="0" ${disabledAttr}>
                 </td>
                 <td class="text-end">
                     <input type="number" class="form-control form-control-sm d-inline-block edit-qty"
@@ -467,8 +463,8 @@
                             <tr>
                                 <td><small>${record.changed_at.slice(0, 16)}</small></td>
                                 <td><small>${record.changed_by}</small></td>
-                                <td class="text-end text-danger">${formatCurrency(record.old_price)}</td>
-                                <td class="text-end text-success">${formatCurrency(record.new_price)}</td>
+                                <td class="text-end text-danger">${CMShell.formatCurrency(record.old_price,currentCurrency)}</td>
+                                <td class="text-end text-success">${CMShell.formatCurrency(record.new_price,currentCurrency)}</td>
                                 <td class="text-end">${record.old_qty}</td>
                                 <td class="text-end">${record.new_qty}</td>
                             </tr>

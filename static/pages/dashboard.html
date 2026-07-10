@@ -336,7 +336,7 @@
         document.getElementById('statWaiting').textContent = data.waiting_count ?? '—';
         document.getElementById('statPending').textContent = data.pending_count ?? '—';
         document.getElementById('statSeenToday').textContent = data.seen_today_count ?? '—';
-        document.getElementById('statTotalQueue').textContent = `${data.total_queue_count ?? 0} total`;
+        document.getElementById('statTotalQueue').textContent = `${CMShell.formatNumber(data.total_queue_count ?? 0)} total`;
         document.getElementById('statAppointments').textContent = data.appointments_count ?? '—';
         document.getElementById('statTotalItems').textContent = data.total_items_count ?? '—';
         document.getElementById('statLowStock').textContent = data.low_stock_count ?? '—';
@@ -349,7 +349,7 @@
         const currency = data.currency || { symbol: 'MK', subunit_ratio: 100 };
         document.getElementById('currencySymbol').textContent = currency.symbol;
         document.getElementById('statTodayCashAmount').textContent = 
-            (data.today_cash_collected / currency.subunit_ratio).toFixed(2);
+            CMShell.formatCurrency(data.today_cash_collected, currency);
 
         // Lock the "Create Clinic" button if offline
         const createClinicBtn = document.getElementById('createClinicBtn');
