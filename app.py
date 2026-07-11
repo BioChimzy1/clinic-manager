@@ -11,7 +11,15 @@ from roles_permissions import has_permission
 app = Flask(__name__)
 
 # THIS IS REQUIRED FOR LOGIN SESSIONS TO WORK
-app.secret_key = os.environ.get('SECRET_KEY', 'dev-only-fallback-do-not-use-in-prod')
+_secret_key = os.environ.get('SECRET_KEY')
+if not _secret_key:
+    raise RuntimeError(
+        "SECRET_KEY environment variable is not set. Refusing to start with an "
+        "insecure fallback key. Set it in your Termux shell profile (~/.bashrc) "
+        "for local dev, or in the WSGI configuration file on PythonAnywhere for "
+        "production. See past chat notes for how each was set up."
+    )
+app.secret_key = _secret_key
 
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
