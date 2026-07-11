@@ -274,17 +274,48 @@
     });
 
     async function loadDashboard() {
+        let dashboardData = null;
+        let hadCache = false;
+
+        // 1. Try to load from IndexedDB cache FIRST (so it shows up instantly)
         try {
-            const res = await fetch('/api/dashboard');
-            if (!res.ok) throw new Error('bad response');
-            const data = await res.json();
-            await cmSaveDashboardSnapshot(data);
-            renderDashboard(data, false);
-        } catch (err) {
-            const cached = await cmGetDashboardSnapshot();
-            if (cached) {
-                renderDashboard(cached, true);
+            if (typeof cmGetDashboardSnapshot === 'function') {
+                const cached = await cmGetDashboardSnapshot();
+                if (cached) {
+                    dashboardData = cached;
+                    hadCache = true;
+                    renderDashboard(dashboardData, true); // Pass 'true' to show offline banner
+                }
             }
+        } catch (e) {
+            console.log("No dashboard cache found yet. This is normal on first visit.");
+        }
+
+        // 2. If we are online, go get the FRESH data from the server
+        if (navigator.onLine) {
+            try {
+                const res = await fetch('/api/dashboard');
+                if (res.ok) {
+                    const freshData = await res.json();
+
+                    // Save it to IndexedDB for next time the user goes offline!
+                    if (typeof cmSaveDashboardSnapshot === 'function') {
+                        await cmSaveDashboardSnapshot(freshData);
+                    }
+
+                    // Update the UI with the fresh numbers
+                    renderDashboard(freshData, false); // Pass 'false' to hide offline banner
+                    return;
+                }
+            } catch (err) {
+                console.error("Failed to fetch live dashboard data:", err);
+                // If online fetch fails, we already have the dashboardData variable from step 1
+            }
+        }
+
+        // 3. No fresh data and no cache — nothing has been rendered yet
+        if (!hadCache) {
+            renderDashboard(null, true);
         }
     }
 
@@ -292,12 +323,39 @@
         isOfflineMode = isStale;
         const banner = document.getElementById('dashboardStaleBanner');
 
+        if (!data) {
+            // No cache and no live data — nothing to show yet
+            if (banner) {
+                banner.textContent = '📭 No dashboard data available offline yet. Connect to the internet to load it.';
+                banner.style.display = 'block';
+            }
+
+            const statIds = [
+                'statWaiting', 'statPending', 'statSeenToday', 'statTotalQueue',
+                'statAppointments', 'statTotalItems', 'statLowStock', 'statExpiringSoon',
+                'statPricedItems', 'statCashierCount', 'statLoansCount', 'statTodayCashAmount'
+            ];
+            statIds.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = '—';
+            });
+
+            const createClinicBtn = document.getElementById('createClinicBtn');
+            if (createClinicBtn) {
+                createClinicBtn.disabled = true;
+                createClinicBtn.title = 'Connect to the internet to create a new clinic';
+            }
+            return;
+        }
+
         if (isStale) {
             const when = new Date(data.fetched_at).toLocaleString();
-            banner.textContent = `⏳ Figures as of ${when} — go online for current numbers.`;
-            banner.style.display = 'block';
+            if (banner) {
+                banner.textContent = `⏳ Figures as of ${when} — go online for current numbers.`;
+                banner.style.display = 'block';
+            }
         } else {
-            banner.style.display = 'none';
+            if (banner) banner.style.display = 'none';
         }
 
         document.getElementById('statWaiting').textContent = data.waiting_count ?? '—';
@@ -311,12 +369,12 @@
         document.getElementById('statPricedItems').textContent = data.priced_items_count ?? '—';
         document.getElementById('statCashierCount').textContent = data.cashier_count ?? '—';
         document.getElementById('statLoansCount').textContent = data.loans_count ?? '—';
-
+ 
         const currency = data.currency || { symbol: 'MK', subunit_ratio: 100 };
         document.getElementById('currencySymbol').textContent = currency.symbol;
         document.getElementById('statTodayCashAmount').textContent = 
             CMShell.formatCurrency(data.today_cash_collected, currency);
-
+ 
         const createClinicBtn = document.getElementById('createClinicBtn');
         if (createClinicBtn) {
             createClinicBtn.disabled = isStale;
