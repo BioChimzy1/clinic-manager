@@ -2,12 +2,13 @@
 // ClinicManager offline outbox
 // ------------------------------------------------------------------
 const CM_DB_NAME = 'cm_outbox_v1';
-const CM_DB_VERSION = 5;
+const CM_DB_VERSION = 6;   // Bumped for new role_snapshot store (was 5)
 const STORE_QUEUE_REG = 'queue_registrations';
 const STORE_QUEUE_SNAPSHOT = 'queue_snapshot';
 const STORE_PRICE_LIST_SNAPSHOT = 'price_list_snapshot';
 const STORE_INVENTORY_SNAPSHOT = 'inventory_snapshot';
 const STORE_DASHBOARD_SNAPSHOT = 'dashboard_snapshot';
+const STORE_ROLE_SNAPSHOT = 'role_snapshot';
 
 function cmOpenDB() {
   return new Promise((resolve, reject) => {
@@ -28,6 +29,9 @@ function cmOpenDB() {
       }
       if (!db.objectStoreNames.contains(STORE_DASHBOARD_SNAPSHOT)) {
         db.createObjectStore(STORE_DASHBOARD_SNAPSHOT, { keyPath: 'key' });
+      }
+      if (!db.objectStoreNames.contains(STORE_ROLE_SNAPSHOT)) {
+        db.createObjectStore(STORE_ROLE_SNAPSHOT, { keyPath: 'key' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -120,6 +124,28 @@ function cmGetDashboardSnapshot() {
     return cmOpenDB().then((db) => new Promise((resolve, reject) => {
         const tx = db.transaction(STORE_DASHBOARD_SNAPSHOT, 'readonly');
         const req = tx.objectStore(STORE_DASHBOARD_SNAPSHOT).get('current');
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+    }));
+}
+
+// Caches the last-known authenticated session (role, clinic_id, clinic_name)
+// so that when /api/verify can't be reached offline, the UI can still show
+// role-appropriate content instead of falling back to a generic "offline"
+// role that data-role-allow doesn't recognize and therefore hides everything.
+function cmSaveRoleSnapshot(data) {
+    return cmOpenDB().then((db) => new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_ROLE_SNAPSHOT, 'readwrite');
+        tx.objectStore(STORE_ROLE_SNAPSHOT).put({ key: 'current', ...data });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    }));
+}
+
+function cmGetRoleSnapshot() {
+    return cmOpenDB().then((db) => new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_ROLE_SNAPSHOT, 'readonly');
+        const req = tx.objectStore(STORE_ROLE_SNAPSHOT).get('current');
         req.onsuccess = () => resolve(req.result || null);
         req.onerror = () => reject(req.error);
     }));

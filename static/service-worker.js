@@ -1,4 +1,4 @@
-const CACHE_NAME = 'clinicmanager-v9';   // Bumped version to force update (was v8)
+const CACHE_NAME = 'clinicmanager-v10';   // Bumped to force update after role-snapshot fix (was v9)
 
 const STATIC_ASSETS = [
   '/static/manifest.json',

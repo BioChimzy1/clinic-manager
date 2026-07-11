@@ -249,17 +249,53 @@ const CMShell = (function () {
             const res = await fetch('/api/verify');
             if (!res.ok) throw new Error('not authenticated');
             verify = await res.json();
+
+            // Cache the real session so that if we go offline later,
+            // role-gated UI (data-role-allow) still shows the right content
+            // instead of falling back to a generic role nothing matches.
+            if (typeof cmSaveRoleSnapshot === 'function') {
+                cmSaveRoleSnapshot({
+                    staff_id: verify?.staff_id || null,
+                    role: verify?.role || null,
+                    clinic_id: verify?.clinic_id || null,
+                    clinic_name: verify?.clinic_name || null
+                }).catch(() => {
+                    // Non-fatal if IndexedDB write fails
+                });
+            }
         } catch (err) {
             if (!navigator.onLine) {
                 isOffline = true;
                 console.log('🔌 Offline mode detected. Using cached auth state.');
-                // Create a fake offline session so nav still renders
-                verify = {
-                    staff_id: null,
-                    role: 'offline',
-                    clinic_id: null,
-                    clinic_name: 'Offline Clinic'
-                };
+
+                let cachedRole = null;
+                if (typeof cmGetRoleSnapshot === 'function') {
+                    try {
+                        cachedRole = await cmGetRoleSnapshot();
+                    } catch (e) {
+                        cachedRole = null;
+                    }
+                }
+
+                if (cachedRole && cachedRole.role) {
+                    // Reuse the last-known real role/clinic so role-gated
+                    // cards and nav items render the same as when online.
+                    verify = {
+                        staff_id: cachedRole.staff_id,
+                        role: cachedRole.role,
+                        clinic_id: cachedRole.clinic_id,
+                        clinic_name: cachedRole.clinic_name || 'Offline Clinic'
+                    };
+                } else {
+                    // No cached session yet (e.g. very first visit was offline) —
+                    // fall back to a generic offline session so nav still renders.
+                    verify = {
+                        staff_id: null,
+                        role: 'offline',
+                        clinic_id: null,
+                        clinic_name: 'Offline Clinic'
+                    };
+                }
             } else {
                 window.location.href = '/login';
                 return { authenticated: false };
