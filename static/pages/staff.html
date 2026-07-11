@@ -186,6 +186,26 @@
             el.style.display = allowed.includes(role) ? '' : 'none';
         });
 
+        // Only admins can assign the Admin role -- hide the option in the
+        // ADD modal for non-admins so they can't select it and get a 403
+        // back after filling out the whole form.
+        //
+        // Deliberately NOT touching the EDIT modal's option list: editRole's
+        // value gets set from the target staff member's *current* role when
+        // the Edit button is clicked (see below). If "Admin" were removed
+        // from that select and a non-admin opened the edit form for an
+        // existing admin account, the value assignment would silently fail
+        // to match, the dropdown would default to whatever option is first,
+        // and submitting the (unnoticed) change would demote that admin.
+        // The server already blocks a non-admin from *setting* role to
+        // Admin, so leaving the option in the edit list is safe -- it just
+        // means a non-admin editing someone else into Admin still gets a
+        // clear 403 rather than a silently wrong dropdown.
+        if (role !== 'admin') {
+            document.querySelectorAll('#addStaffModal select[name="role"] option[value="Admin"]')
+                .forEach(opt => opt.remove());
+        }
+
         loadStaff();
 
         // --- ADD STAFF ---
@@ -212,17 +232,24 @@
         });
 
         // --- EDIT STAFF ---
-        document.querySelectorAll('.edit-staff-btn').forEach(btn => {
-            btn.addEventListener('click', function() {
-                document.getElementById('editStaffId').value = this.dataset.id;
-                document.getElementById('editFullName').value = this.dataset.name;
-                document.getElementById('editRole').value = this.dataset.role;
-                document.getElementById('editUsername').value = this.dataset.username;
-                document.getElementById('editPassword').value = '';
+        // NOTE: this used to bind directly to `.edit-staff-btn` elements
+        // here, but those rows don't exist yet at this point -- loadStaff()
+        // fetches and renders them asynchronously, and re-renders the whole
+        // tbody on every load. Binding here always found zero buttons, so
+        // Edit silently did nothing. Delegating the listener to the table
+        // body (which exists from page load and never gets replaced,
+        // only its children do) means it keeps working across re-renders.
+        document.getElementById('staffTableBody').addEventListener('click', function(e) {
+            const btn = e.target.closest('.edit-staff-btn');
+            if (!btn) return;
+            document.getElementById('editStaffId').value = btn.dataset.id;
+            document.getElementById('editFullName').value = btn.dataset.name;
+            document.getElementById('editRole').value = btn.dataset.role;
+            document.getElementById('editUsername').value = btn.dataset.username;
+            document.getElementById('editPassword').value = '';
 
-                const modal = new bootstrap.Modal(document.getElementById('editStaffModal'));
-                modal.show();
-            });
+            const modal = new bootstrap.Modal(document.getElementById('editStaffModal'));
+            modal.show();
         });
 
         document.getElementById('updateStaffBtn').addEventListener('click', function() {

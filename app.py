@@ -1,12 +1,16 @@
 import os
+import re
 import sqlite3
+import secrets
+import time
 import datetime
 import uuid
 import math
+from collections import defaultdict
 from functools import wraps
 from flask import Flask, request, session, jsonify, send_from_directory, g
 from werkzeug.security import check_password_hash, generate_password_hash
-from roles_permissions import has_permission
+from roles_permissions import has_permission, ROLES
 
 app = Flask(__name__)
 
@@ -22,6 +26,28 @@ if not _secret_key:
 app.secret_key = _secret_key
 
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+app.config['SESSION_COOKIE_SECURE'] = True      # only send session cookie over HTTPS
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'   # basic CSRF mitigation
+app.config['SESSION_COOKIE_HTTPONLY'] = True    # JS can't read the cookie
+
+# ------------------------------------------------------------------
+# LOGIN RATE LIMITING (simple in-memory, per-process)
+# ------------------------------------------------------------------
+# NOTE: this is per-process. On PythonAnywhere's free/single-worker tier
+# that's fine. If you ever move to multiple workers, this needs to move
+# to something shared (e.g. a db table) or it can be bypassed by hitting
+# different workers.
+_login_attempts = defaultdict(list)
+LOGIN_ATTEMPT_LIMIT = 5
+LOGIN_ATTEMPT_WINDOW_SECONDS = 60
+
+def _login_rate_limited(key):
+    now = time.time()
+    _login_attempts[key] = [t for t in _login_attempts[key] if now - t < LOGIN_ATTEMPT_WINDOW_SECONDS]
+    return len(_login_attempts[key]) >= LOGIN_ATTEMPT_LIMIT
+
+def _record_login_attempt(key):
+    _login_attempts[key].append(time.time())
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE = os.path.join(BASE_DIR, 'clinic.db')
@@ -798,7 +824,7 @@ def init_db():
 
     if staff_count == 0:
         default_username = "admin"
-        default_password = "admin123"
+        default_password = secrets.token_urlsafe(12)
         hashed_pw = generate_password_hash(default_password)
 
         cursor.execute('''
@@ -813,7 +839,8 @@ def init_db():
             1,
             datetime.datetime.now().isoformat()
         ))
-        print(f"✅ Default admin created! Username: '{default_username}', Password: '{default_password}'")
+        print(f"✅ Default admin created! Username: '{default_username}'  Password: '{default_password}'")
+        print("⚠️  Log in and change this password immediately -- it will not be shown again.")
     
     conn.commit()
     conn.close()
@@ -829,13 +856,18 @@ def api_login():
     data = request.get_json()
     username = data.get('username')
     password = data.get('password')
-    
+
+    limiter_key = f"{request.remote_addr}:{username}"
+    if _login_rate_limited(limiter_key):
+        return jsonify({'success': False, 'error': 'Too many login attempts. Please wait a minute and try again.'}), 429
+
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT id, role, password_hash FROM staff WHERE username = ? AND is_active = 1", (username,))
     user = cursor.fetchone()
     
     if user and check_password_hash(user[2], password):
+        _login_attempts.pop(limiter_key, None)
         session['staff_id'] = user[0]
         session['role'] = user[1]
         
@@ -871,6 +903,7 @@ def api_login():
             'clinics': [{'id': c[0], 'name': c[1], 'role': c[2]} for c in clinics]
         })
     
+    _record_login_attempt(limiter_key)
     return jsonify({'success': False, 'error': 'Invalid username or password'}), 401
 
 @app.route('/api/logout', methods=['POST'])
@@ -1506,7 +1539,8 @@ def api_price_list_update(item_id):
         return jsonify({'success': True})
     except Exception as e:
         conn.rollback()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        app.logger.exception("Unhandled error in request")
+        return jsonify({'success': False, 'error': 'Something went wrong. Please try again.'}), 500
 
 @app.route('/api/price_list/delete/<int:item_id>', methods=['DELETE'])
 @require_permission('price_list.delete')
@@ -1929,7 +1963,8 @@ def api_cashier_process(visit_id):
         
     except Exception as e:
         conn.rollback()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        app.logger.exception("Unhandled error in request")
+        return jsonify({'success': False, 'error': 'Something went wrong. Please try again.'}), 500
 
 @app.route('/api/cashier/send_back/<int:visit_id>', methods=['POST'])
 @require_permission('cashier.send_back')
@@ -2171,7 +2206,8 @@ def api_loan_pay(visit_id):
         
     except Exception as e:
         conn.rollback()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        app.logger.exception("Unhandled error in request")
+        return jsonify({'success': False, 'error': 'Something went wrong. Please try again.'}), 500
 
 # ------------------------------------------------------------------
 # API ROUTES - RETAIL
@@ -2293,7 +2329,8 @@ def api_retail_create_draft():
         
     except Exception as e:
         conn.rollback()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        app.logger.exception("Unhandled error in request")
+        return jsonify({'success': False, 'error': 'Something went wrong. Please try again.'}), 500
 
 @app.route('/api/retail/pending', methods=['GET'])
 @require_permission('retail.view')
@@ -2622,7 +2659,13 @@ def api_staff_add():
     
     if not full_name or not role or not username:
         return jsonify({'success': False, 'error': 'Name, role, and username are required.'}), 400
-    
+
+    role_key = role.strip().lower()
+    if role_key not in ROLES:
+        return jsonify({'success': False, 'error': 'Invalid role.'}), 400
+    if role_key == 'admin' and session.get('role', '').strip().lower() != 'admin':
+        return jsonify({'success': False, 'error': 'Only an administrator can assign the admin role.'}), 403
+
     conn = get_db()
     cursor = conn.cursor()
     
@@ -2671,7 +2714,8 @@ def api_staff_add():
     except sqlite3.IntegrityError:
         return jsonify({'success': False, 'error': 'A staff member with this username already exists.'}), 400
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        app.logger.exception("Unhandled error in request")
+        return jsonify({'success': False, 'error': 'Something went wrong. Please try again.'}), 500
 
 @app.route('/api/staff/edit', methods=['POST'])
 @require_permission('staff.edit')
@@ -2689,15 +2733,42 @@ def api_staff_edit():
     
     if not staff_id or not full_name or not role or not username:
         return jsonify({'success': False, 'error': 'Name, role, and username are required.'}), 400
-    
+
+    role_key = role.strip().lower()
+    if role_key not in ROLES:
+        return jsonify({'success': False, 'error': 'Invalid role.'}), 400
+    if role_key == 'admin' and session.get('role', '').strip().lower() != 'admin':
+        return jsonify({'success': False, 'error': 'Only an administrator can assign the admin role.'}), 403
+
     conn = get_db()
     cursor = conn.cursor()
     
     cursor.execute('''
-        SELECT 1 FROM staff_clinics WHERE staff_id = ? AND clinic_id = ?
+        SELECT sc.role, s.username
+        FROM staff_clinics sc
+        JOIN staff s ON s.id = sc.staff_id
+        WHERE sc.staff_id = ? AND sc.clinic_id = ?
     ''', (staff_id, clinic_id))
-    if not cursor.fetchone():
+    existing_link = cursor.fetchone()
+    if not existing_link:
         return jsonify({'success': False, 'error': 'This staff member is not part of your clinic.'}), 400
+
+    current_role_key, target_username = existing_link
+    current_role_key = (current_role_key or '').strip().lower()
+
+    if current_role_key == 'admin' and session.get('role', '').strip().lower() != 'admin':
+        return jsonify({'success': False, 'error': 'Only an administrator can modify another administrator\'s account.'}), 403
+
+    # The seeded default admin account is the account of last resort -- if
+    # its role is ever changed away from admin (by anyone, including itself),
+    # there's a real chance no one is left who can undo it, which is exactly
+    # what happened before this fix. Its role is permanently locked once it
+    # IS admin; other fields (name, username, password) can still be edited
+    # normally, and if it's ever demoted by some other means, an admin can
+    # still restore it back to 'admin' -- only moving AWAY from admin is
+    # blocked, not back to it.
+    if target_username == 'admin' and current_role_key == 'admin' and role_key != 'admin':
+        return jsonify({'success': False, 'error': "The default System Administrator account's role can never be changed away from admin."}), 403
     
     try:
         if password:
@@ -2722,7 +2793,8 @@ def api_staff_edit():
     except sqlite3.IntegrityError:
         return jsonify({'success': False, 'error': 'A staff member with this username already exists.'}), 400
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        app.logger.exception("Unhandled error in request")
+        return jsonify({'success': False, 'error': 'Something went wrong. Please try again.'}), 500
 
 @app.route('/api/staff/deactivate/<int:staff_id>', methods=['POST'])
 @require_permission('staff.deactivate')
@@ -3289,8 +3361,12 @@ def serve_static_page(path):
         return jsonify({'error': 'Not found'}), 404
     if path == '':
         path = 'home'
-    # Prevent directory traversal
-    safe_path = path.replace('..', '').strip('/')
+    # Allow-list instead of blacklist: only letters, numbers, underscore,
+    # hyphen and forward slash (for nested page paths). Anything else
+    # (including '..', backslashes, absolute paths) is rejected outright.
+    if not re.fullmatch(r'[A-Za-z0-9_\-/]+', path):
+        return jsonify({'error': 'Not found'}), 404
+    safe_path = path.strip('/')
     try:
         return send_from_directory('static/pages', f'{safe_path}.html')
     except FileNotFoundError:
@@ -3307,6 +3383,11 @@ def add_cache_headers(response):
         '/finance', '/staff'
     ]:
         response.headers['Cache-Control'] = 'public, max-age=3600'
+
+    # Basic security headers
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
     return response
 
 # ------------------------------------------------------------------
