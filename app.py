@@ -1569,7 +1569,14 @@ def api_price_list_history(item_id):
 
     conn = get_db()
     cursor = conn.cursor()
-    
+
+    # Confirm this price_list item actually belongs to the current clinic
+    # before returning its history -- otherwise any clinic's staff could
+    # pull another clinic's price change history just by guessing item_id.
+    cursor.execute("SELECT id FROM price_list WHERE id = ? AND clinic_id = ?", (item_id, clinic_id))
+    if not cursor.fetchone():
+        return jsonify({'error': 'Item not found'}), 404
+
     cursor.execute('''
         SELECT item_type, item_name, old_price, new_price, old_quantity, new_quantity, changed_at, staff.full_name
         FROM price_history
@@ -1876,7 +1883,12 @@ def api_cashier_process(visit_id):
             else:
                 loan_due_date = None
 
-            cursor.execute("SELECT full_name FROM staff WHERE id = ? AND is_active = 1", (witness_id,))
+            cursor.execute('''
+                SELECT staff.full_name
+                FROM staff
+                JOIN staff_clinics ON staff.id = staff_clinics.staff_id
+                WHERE staff.id = ? AND staff.is_active = 1 AND staff_clinics.clinic_id = ?
+            ''', (witness_id, clinic_id))
             witness_row = cursor.fetchone()
             witness_name = witness_row[0] if witness_row else 'Unknown Staff'
             
@@ -2963,32 +2975,40 @@ def api_appointment_update(appt_id):
     conn = get_db()
     cursor = conn.cursor()
 
+    # Confirm this appointment actually belongs to the current clinic before
+    # touching it -- without this, any staff with appointment permissions
+    # could confirm/cancel/reschedule/check-in ANY appointment system-wide
+    # just by guessing appt_id.
+    cursor.execute("SELECT id FROM appointments WHERE id = ? AND clinic_id = ?", (appt_id, clinic_id))
+    if not cursor.fetchone():
+        return jsonify({'success': False, 'error': 'Appointment not found.'}), 404
+
     if action == 'confirm':
         cursor.execute('''
-            UPDATE appointments SET status = 'Scheduled', updated_at = ? WHERE id = ?
-        ''', (now, appt_id))
+            UPDATE appointments SET status = 'Scheduled', updated_at = ? WHERE id = ? AND clinic_id = ?
+        ''', (now, appt_id, clinic_id))
 
     elif action == 'cancel':
         reason = data.get('reason', 'No reason provided')
         cursor.execute('''
-            UPDATE appointments SET status = 'Cancelled', cancelled_reason = ?, updated_at = ? WHERE id = ?
-        ''', (reason, now, appt_id))
+            UPDATE appointments SET status = 'Cancelled', cancelled_reason = ?, updated_at = ? WHERE id = ? AND clinic_id = ?
+        ''', (reason, now, appt_id, clinic_id))
 
     elif action == 'reschedule':
         new_date = data.get('new_date')
         cursor.execute('''
-            UPDATE appointments SET appointment_date = ?, status = 'Pending', updated_at = ? WHERE id = ?
-        ''', (new_date, now, appt_id))
+            UPDATE appointments SET appointment_date = ?, status = 'Pending', updated_at = ? WHERE id = ? AND clinic_id = ?
+        ''', (new_date, now, appt_id, clinic_id))
 
     elif action == 'missed':
         cursor.execute('''
-            UPDATE appointments SET status = 'Missed', updated_at = ? WHERE id = ?
-        ''', (now, appt_id))
+            UPDATE appointments SET status = 'Missed', updated_at = ? WHERE id = ? AND clinic_id = ?
+        ''', (now, appt_id, clinic_id))
 
     elif action == 'check_in':
         cursor.execute('''
-            UPDATE appointments SET status = 'Waiting', check_in_time = ?, updated_at = ? WHERE id = ?
-        ''', (now, now, appt_id))
+            UPDATE appointments SET status = 'Waiting', check_in_time = ?, updated_at = ? WHERE id = ? AND clinic_id = ?
+        ''', (now, now, appt_id, clinic_id))
 
     else:
         return jsonify({'success': False, 'error': 'Invalid action'}), 400
@@ -3115,10 +3135,11 @@ def api_visit_create():
         SELECT patients.id, patients.name, appointments.id, appointments.status
         FROM patients
         JOIN appointments ON patients.id = appointments.patient_id
-        WHERE patients.id = ? AND appointments.status IN ('Waiting', 'Pending', 'Returned to Doctor') 
+        WHERE patients.id = ? AND appointments.clinic_id = ?
+          AND appointments.status IN ('Waiting', 'Pending', 'Returned to Doctor') 
         ORDER BY appointments.created_at DESC
         LIMIT 1
-    ''', (patient_id,))
+    ''', (patient_id, clinic_id))
     row = cursor.fetchone()
 
     if row is None:
@@ -3224,10 +3245,11 @@ def api_visit_prefill(patient_id):
                appointments.id, appointments.appointment_type, appointments.status
         FROM patients
         JOIN appointments ON patients.id = appointments.patient_id
-        WHERE patients.id = ? AND appointments.status IN ('Waiting', 'Pending', 'Returned to Doctor') 
+        WHERE patients.id = ? AND appointments.clinic_id = ?
+          AND appointments.status IN ('Waiting', 'Pending', 'Returned to Doctor') 
         ORDER BY appointments.created_at DESC
         LIMIT 1
-    ''', (patient_id,))
+    ''', (patient_id, clinic_id))
     row = cursor.fetchone()
 
     if row is None:
