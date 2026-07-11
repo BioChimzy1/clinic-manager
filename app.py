@@ -2706,6 +2706,9 @@ def api_staff_add():
         if not password:
             return jsonify({'success': False, 'error': 'Password is required for a new staff account.'}), 400
         
+        if len(password) < 8:
+            return jsonify({'success': False, 'error': 'Password must be at least 8 characters long.'}), 400
+        
         hashed_pw = generate_password_hash(password)
         
         cursor.execute('''
@@ -2784,6 +2787,8 @@ def api_staff_edit():
     
     try:
         if password:
+            if len(password) < 8:
+                return jsonify({'success': False, 'error': 'Password must be at least 8 characters long.'}), 400
             hashed_pw = generate_password_hash(password)
             cursor.execute('''
                 UPDATE staff SET full_name = ?, username = ?, password_hash = ?, updated_at = ?
