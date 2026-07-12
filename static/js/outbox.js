@@ -2,7 +2,7 @@
 // ClinicManager offline outbox
 // ------------------------------------------------------------------
 const CM_DB_NAME = 'cm_outbox_v1';
-const CM_DB_VERSION = 6;   // Bumped for new role_snapshot store (was 5)
+const CM_DB_VERSION = 6;
 const STORE_QUEUE_REG = 'queue_registrations';
 const STORE_QUEUE_SNAPSHOT = 'queue_snapshot';
 const STORE_PRICE_LIST_SNAPSHOT = 'price_list_snapshot';
@@ -129,10 +129,6 @@ function cmGetDashboardSnapshot() {
     }));
 }
 
-// Caches the last-known authenticated session (role, clinic_id, clinic_name)
-// so that when /api/verify can't be reached offline, the UI can still show
-// role-appropriate content instead of falling back to a generic "offline"
-// role that data-role-allow doesn't recognize and therefore hides everything.
 function cmSaveRoleSnapshot(data) {
     return cmOpenDB().then((db) => new Promise((resolve, reject) => {
         const tx = db.transaction(STORE_ROLE_SNAPSHOT, 'readwrite');
@@ -160,11 +156,15 @@ function cmUuid() {
   });
 }
 
+// Fixed to work uniformly across window and headless background contexts
 function cmEscapeHtml(str) {
-  const div = (typeof document !== 'undefined') ? document.createElement('div') : null;
-  if (!div) return String(str);
-  div.textContent = str;
-  return div.innerHTML;
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
 
 async function cmSyncOneRegistration(record) {
@@ -176,6 +176,8 @@ async function cmSyncOneRegistration(record) {
     });
     if (!res.ok) return false;
     const data = await res.json();
+    
+    // Explicitly mutate wrapper container records cleanly
     record.synced = true;
     record.server_patient_id = data.patient_id;
     record.queue_status = data.queue_status;
@@ -207,12 +209,17 @@ async function cmQueueRegistration(payload) {
 
   const success = await cmSyncOneRegistration(record);
 
-  if (!success && 'serviceWorker' in navigator && 'SyncManager' in self) {
+  // Safe Environment Execution Verification Strategy
+  const isBrowserWindow = typeof window !== 'undefined' && typeof navigator !== 'undefined';
+  
+  if (!success && isBrowserWindow && 'serviceWorker' in navigator) {
     try {
       const reg = await navigator.serviceWorker.ready;
-      await reg.sync.register('sync-queue-registrations');
+      if (reg.sync) {
+        await reg.sync.register('sync-queue-registrations');
+      }
     } catch (err) {
-      // Background Sync unsupported
+      // Periodic background or continuous synchronization unavailable
     }
   }
 

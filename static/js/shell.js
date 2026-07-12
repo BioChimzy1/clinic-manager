@@ -4,17 +4,24 @@
 const CMShell = (function () {
 
     const NAV_ITEMS = [
+        // Core Daily Operations
         { href: '/dashboard', label: '🏠 Dashboard', page: 'dashboard' },
         { href: '/queue', label: '📋 Queue', page: 'queue' },
         { href: '/register', label: '👤 Register', page: 'register' },
+        { href: '/appointments', label: '📅 Appointments', page: 'appointments' },
+
+        // Inventory & Sales
         { href: '/inventory', label: '📦 Inventory', page: 'inventory' },
         { href: '/price_list', label: '💰 Price List', page: 'price_list' },
-        { href: '/cashier', label: '💰 Cashier', page: 'cashier' },
-        { href: '/loans', label: '💳 Loans', page: 'loans' },
         { href: '/retail', label: '🏪 Retail', page: 'retail' },
-        { href: '/appointments', label: '📅 Appointments', page: 'appointments' },
+        { href: '/cashier', label: '💰 Cashier', page: 'cashier' },
+
+        // Management & Financials
         { href: '/finance', label: '📊 Finance', page: 'finance' },
+        { href: '/loans', label: '💳 Loans', page: 'loans' },
         { href: '/staff', label: '👨‍⚕️ Staff', page: 'staff' },
+
+        // Utilities
         { href: '/about', label: 'ℹ️ About', page: 'about' },
         { href: '/contact', label: '📞 Contact', page: 'contact' },
     ];
@@ -250,18 +257,13 @@ const CMShell = (function () {
             if (!res.ok) throw new Error('not authenticated');
             verify = await res.json();
 
-            // Cache the real session so that if we go offline later,
-            // role-gated UI (data-role-allow) still shows the right content
-            // instead of falling back to a generic role nothing matches.
             if (typeof cmSaveRoleSnapshot === 'function') {
                 cmSaveRoleSnapshot({
                     staff_id: verify?.staff_id || null,
                     role: verify?.role || null,
                     clinic_id: verify?.clinic_id || null,
                     clinic_name: verify?.clinic_name || null
-                }).catch(() => {
-                    // Non-fatal if IndexedDB write fails
-                });
+                }).catch(() => {});
             }
         } catch (err) {
             if (!navigator.onLine) {
@@ -270,16 +272,10 @@ const CMShell = (function () {
 
                 let cachedRole = null;
                 if (typeof cmGetRoleSnapshot === 'function') {
-                    try {
-                        cachedRole = await cmGetRoleSnapshot();
-                    } catch (e) {
-                        cachedRole = null;
-                    }
+                    try { cachedRole = await cmGetRoleSnapshot(); } catch (e) { cachedRole = null; }
                 }
 
                 if (cachedRole && cachedRole.role) {
-                    // Reuse the last-known real role/clinic so role-gated
-                    // cards and nav items render the same as when online.
                     verify = {
                         staff_id: cachedRole.staff_id,
                         role: cachedRole.role,
@@ -287,8 +283,6 @@ const CMShell = (function () {
                         clinic_name: cachedRole.clinic_name || 'Offline Clinic'
                     };
                 } else {
-                    // No cached session yet (e.g. very first visit was offline) —
-                    // fall back to a generic offline session so nav still renders.
                     verify = {
                         staff_id: null,
                         role: 'offline',
@@ -302,7 +296,6 @@ const CMShell = (function () {
             }
         }
 
-        // Only fetch clinics if online
         if (!isOffline && verify) {
             try {
                 const cRes = await fetch('/api/clinics');
@@ -310,21 +303,18 @@ const CMShell = (function () {
                     const cData = await cRes.json();
                     clinics = cData.clinics || [];
                 }
-            } catch (err) {
-                // Non-fatal
-            }
+            } catch (err) {}
         }
 
-        // Fetch currency if online
         if (!isOffline) {
             try {
                 const currencyRes = await fetch('/api/clinic/currency');
                 if (currencyRes.ok) {
-                    window.__currency = await currencyRes.json();
+                    const resData = await currencyRes.json();
+                    // Extract gracefully whether packaged inside a root data object or raw envelope dictionary
+                    window.__currency = resData.currency || resData;
                 }
-            } catch (err) {
-                // Leave undefined -> fallback to MK
-            }
+            } catch (err) {}
         }
 
         const session = {
@@ -335,12 +325,21 @@ const CMShell = (function () {
             clinics: clinics
         };
 
-        if (!NO_NAV_PAGES.includes(activePage)) {
-            renderNav(activePage, session);
-            renderFooter();
+        // Lifecycle Synchronization Gate to ensure DOM components have finalized rendering
+        const completeInitialization = () => {
+            if (!NO_NAV_PAGES.includes(activePage)) {
+                renderNav(activePage, session);
+                renderFooter();
+            }
+            renderFlash();
+            applyRoleVisibility(session.role);
+        };
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', completeInitialization);
+        } else {
+            completeInitialization();
         }
-        renderFlash();
-        applyRoleVisibility(session.role);
 
         return { authenticated: true, session, isOffline };
     }
