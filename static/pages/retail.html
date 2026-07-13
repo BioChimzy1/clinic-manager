@@ -503,14 +503,13 @@
 
     function renderCart() {
         const tbody = document.getElementById('cartBody');
-        const emptyRow = document.getElementById('emptyCartRow');
         const grandTotalEl = document.getElementById('grandTotal');
         const proceedBtn = document.getElementById('proceedToPaymentBtn');
 
         tbody.innerHTML = '';
 
         if (cart.length === 0) {
-            tbody.appendChild(emptyRow);
+            tbody.innerHTML = '<tr id="emptyCartRow"><td colspan="5" class="text-center text-muted py-3">No items added yet. Select an item above and click Add.</td></tr>';
             grandTotalEl.textContent = CMShell.formatCurrency(0,currentCurrency);
             proceedBtn.disabled = true;
             retailTotal = 0;

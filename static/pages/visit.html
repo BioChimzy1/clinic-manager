@@ -303,13 +303,12 @@
 
     function renderSelectedTable() {
         const tbody = document.getElementById('selectedItemsBody');
-        const emptyRow = document.getElementById('emptyRow');
         const grandTotalEl = document.getElementById('grandTotal');
 
         tbody.innerHTML = '';
 
         if (selected.size === 0) {
-            tbody.appendChild(emptyRow);
+            tbody.innerHTML = '<tr id="emptyRow"><td colspan="6" class="text-center text-muted py-4">No items added yet. Search above to add a consultation, drug, test, or procedure.</td></tr>';
             grandTotalEl.textContent = CMShell.formatCurrency(0,currentCurrency);
             return;
         }
@@ -324,7 +323,7 @@
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td><span class="badge bg-info text-dark">${item.type}</span></td>
-                <td><strong>${item.name}</strong>
+                <td><strong>${cmEscapeHtml(item.name)}</strong>
                     <input type="hidden" name="selected_items" value="${id}">
                 </td>
                 <td class="text-end">${CMShell.formatCurrency(item.price,currentCurrency)} <small class="text-muted">/${item.defaultQuantity}</small></td>
@@ -344,7 +343,7 @@
         // Wire up qty changes
         tbody.querySelectorAll('.qty-input').forEach(input => {
             input.addEventListener('input', function() {
-                const id = this.dataset.id;
+                const id = Number(this.dataset.id);
                 const entry = selected.get(id);
                 if (!entry) return;
 
@@ -360,7 +359,7 @@
             });
 
             input.addEventListener('blur', function() {
-                const id = this.dataset.id;
+                const id = Number(this.dataset.id);
                 const entry = selected.get(id);
                 if (!entry) return;
 
@@ -374,7 +373,7 @@
         // Remove buttons
         tbody.querySelectorAll('.remove-item-btn').forEach(btn => {
             btn.addEventListener('click', function() {
-                const id = this.dataset.id;
+                const id = Number(this.dataset.id);
                 selected.delete(id);
                 renderSelectedTable();
             });
