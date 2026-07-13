@@ -364,7 +364,7 @@
                 <td class="text-end">
                     <div class="d-flex justify-content-end gap-2">
                         ${gt.status === 'Loan Active' ? `<a href="/static/pages/loan_details.html?visit_id=${gt.visit_id}" class="btn btn-outline-primary btn-sm">View Loan</a>` : ''}
-                        <button type="button" class="btn btn-outline-secondary btn-sm toggle-items" data-target="#items-${gt.visit_id}">📦 Items ▾</button>
+                        ${gt.items_sold && gt.items_sold.length > 0 ? `<button type="button" class="btn btn-outline-secondary btn-sm toggle-items" data-target="#items-${gt.visit_id}">📦 Items ▾</button>` : ''}
                         
                         <button type="button" class="btn btn-outline-secondary btn-sm toggle-installments" data-target="#inst-${gt.visit_id}">▾ Installments</button>
                     </div>

@@ -284,7 +284,7 @@ def build_grouped_transactions(cursor, clinic_id, start_date, end_date, today_st
         if top_visit_ids:
             qmarks = ','.join(['?'] * len(top_visit_ids))
             cursor.execute(f'''
-                SELECT visits.id, visits.total_fee, visits.amount_paid, visits.discount_amount, visits.status, visits.is_retail, patients.name
+                SELECT visits.id, visits.total_fee, visits.amount_paid, visits.discount_amount, visits.status, visits.is_retail, patients.name, visits.visit_date
                 FROM visits
                 LEFT JOIN patients ON visits.patient_id = patients.id
                 WHERE visits.id IN ({qmarks})
@@ -320,6 +320,10 @@ def build_grouped_transactions(cursor, clinic_id, start_date, end_date, today_st
                     discount_amount = vrow[3] or 0
                     outstanding = max(0, total_fee - discount_amount - amount_paid)
 
+                    visit_date = vrow[7]
+                    visit_date_only = visit_date[:10] if visit_date else None
+                    items_sold_for_row = items_by_visit.get(vid, []) if summary_date == visit_date_only else []
+
                     grouped_transactions.append({
                         'visit_id': vrow[0],
                         'patient': vrow[6] or '🏪 Retail Sale',
@@ -334,7 +338,7 @@ def build_grouped_transactions(cursor, clinic_id, start_date, end_date, today_st
                         'outstanding': outstanding,
                         'status': vrow[4] or '',
                         'is_retail': vrow[5] or 0,
-                        'items_sold': items_by_visit.get(vid, []),
+                        'items_sold': items_sold_for_row,
                         'installments': installments_map.get(vid, [])
                     })
 
