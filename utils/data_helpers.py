@@ -127,6 +127,7 @@ def get_dashboard_data(clinic_id):
             WHERE clinic_id = ? 
             AND visit_date >= ? AND visit_date <= ?
             AND (is_retail IS NULL OR is_retail = 0)
+            AND status NOT IN ('Returned to Doctor', 'Cancelled')
             
             UNION
             
@@ -135,6 +136,7 @@ def get_dashboard_data(clinic_id):
             WHERE clinic_id = ? 
             AND visit_date >= ? AND visit_date <= ?
             AND is_retail = 1
+            AND status NOT IN ('Returned to Doctor', 'Cancelled')
             
             UNION
             
