@@ -92,14 +92,17 @@ def api_staff_add():
             if cursor.fetchone():
                 return jsonify({'success': False, 'error': 'This staff member is already assigned to your clinic.'}), 400
             
+            # FIXED: bind role_key (normalized lowercase) instead of raw role,
+            # so staff_clinics.role is always stored consistently regardless
+            # of the casing the form/client sent (e.g. 'Admin' -> 'admin').
             cursor.execute('''
                 INSERT INTO staff_clinics (staff_id, clinic_id, role)
                 VALUES (?, ?, ?)
-            ''', (new_staff_id, clinic_id, role))
+            ''', (new_staff_id, clinic_id, role_key))
             
             conn.commit()
             log_audit('ADD_STAFF', 'staff', new_staff_id,
-                      old_value=None, new_value=f"Linked existing staff to clinic. Role: {role}, Username: {username}")
+                      old_value=None, new_value=f"Linked existing staff to clinic. Role: {role_key}, Username: {username}")
             return jsonify({'success': True})
         
         if not password:
@@ -110,20 +113,22 @@ def api_staff_add():
         
         hashed_pw = generate_password_hash(password)
         
+        # FIXED: role_key instead of role
         cursor.execute('''
             INSERT INTO staff (uuid, full_name, role, username, password_hash, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
-        ''', (str(uuid.uuid4()), full_name, role, username, hashed_pw, datetime.datetime.now().isoformat()))
+        ''', (str(uuid.uuid4()), full_name, role_key, username, hashed_pw, datetime.datetime.now().isoformat()))
         new_staff_id = cursor.lastrowid
         
+        # FIXED: role_key instead of role
         cursor.execute('''
             INSERT INTO staff_clinics (staff_id, clinic_id, role)
             VALUES (?, ?, ?)
-        ''', (new_staff_id, clinic_id, role))
+        ''', (new_staff_id, clinic_id, role_key))
         
         conn.commit()
         log_audit('ADD_STAFF', 'staff', new_staff_id, 
-                  old_value=None, new_value=f"Role: {role}, Username: {username}")
+                  old_value=None, new_value=f"Role: {role_key}, Username: {username}")
         return jsonify({'success': True})
     except sqlite3.IntegrityError:
         return jsonify({'success': False, 'error': 'A staff member with this username already exists.'}), 400
@@ -199,9 +204,10 @@ def api_staff_edit():
                 WHERE id = ?
             ''', (full_name, username, datetime.datetime.now().isoformat(), staff_id))
         
+        # FIXED: role_key instead of role
         cursor.execute('''
             UPDATE staff_clinics SET role = ? WHERE staff_id = ? AND clinic_id = ?
-        ''', (role, staff_id, clinic_id))
+        ''', (role_key, staff_id, clinic_id))
         
         conn.commit()
         log_audit('EDIT_STAFF', 'staff', staff_id, old_value="Updated details", new_value="Staff edited")

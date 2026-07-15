@@ -44,6 +44,7 @@ from routes.appointment_routes import bp as appointment_bp
 from routes.visit_routes import bp as visit_bp
 from routes.audit_routes import bp as audit_bp
 from routes.static_routes import bp as static_bp
+from routes.analytics_routes import bp as analytics_bp
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(clinic_bp)
@@ -59,6 +60,7 @@ app.register_blueprint(staff_bp)
 app.register_blueprint(appointment_bp)
 app.register_blueprint(visit_bp)
 app.register_blueprint(audit_bp)
+app.register_blueprint(analytics_bp)
 # static_bp must be registered LAST: it owns the catch-all '/<path:path>'
 # route, which would otherwise swallow every other route registered after it.
 app.register_blueprint(static_bp)

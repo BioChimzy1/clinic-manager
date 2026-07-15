@@ -55,6 +55,7 @@ def api_finance_stats():
         SELECT SUM(discount_amount) FROM visits 
         WHERE discount_amount > 0
         AND clinic_id = ?
+        AND status NOT IN ('Returned to Doctor', 'Cancelled')
         AND updated_at >= ? AND updated_at <= ?
     ''', (clinic_id, start_date, end_date))
     total_discounts = cursor.fetchone()[0] or 0

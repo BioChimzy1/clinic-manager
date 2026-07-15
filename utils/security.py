@@ -3,6 +3,7 @@ from collections import defaultdict
 from functools import wraps
 from flask import session, jsonify
 from roles_permissions import has_permission
+from db import get_db
 
 # ------------------------------------------------------------------
 # LOGIN RATE LIMITING (simple in-memory, per-process)
@@ -38,3 +39,29 @@ def require_permission(permission):
             return view_func(*args, **kwargs)
         return wrapped
     return decorator
+
+# ------------------------------------------------------------------
+# DEVELOPER-ONLY DECORATOR
+# ------------------------------------------------------------------
+# Unlike require_permission, this isn't role/clinic based -- it checks a
+# dedicated is_developer flag on the staff row directly. A "developer"
+# (i.e. the platform maintainer) isn't necessarily a staff member of any
+# particular clinic, so staff_clinics/PERMISSIONS don't apply here.
+def require_developer(view_func):
+    """Gate a route to the platform developer only."""
+    @wraps(view_func)
+    def wrapped(*args, **kwargs):
+        staff_id = session.get('staff_id')
+        if not staff_id:
+            return jsonify({'success': False, 'error': 'Permission denied.'}), 403
+
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute('SELECT is_developer FROM staff WHERE id = ?', (staff_id,))
+        row = cursor.fetchone()
+
+        if not row or not row[0]:
+            return jsonify({'success': False, 'error': 'Permission denied.'}), 403
+
+        return view_func(*args, **kwargs)
+    return wrapped

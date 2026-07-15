@@ -147,7 +147,20 @@ PERMISSIONS = {
     # Audit Trail Logging
     "audit.view": {"admin"},
     "audit.export": {"admin"},
-    
+
+    # Analytics & Reporting
+    # DELIBERATE CALL: admin-only by default. This is separate from
+    # dashboard.view (the shared landing page) -- analytics exposes
+    # per-staff billing performance and clinic-level financial rollups,
+    # which is more sensitive than the daily-ops dashboard. Widen this
+    # if you want e.g. doctor included (finance.view already includes
+    # doctor, so there's precedent if you want analytics.view to match).
+    "analytics.view": {"admin"},
+    # Aggregate view spans every clinic an owner has an admin assignment
+    # in (see get_owned_clinic_ids) -- kept admin-only, no precedent
+    # elsewhere for widening this one.
+    "analytics.view_aggregate": {"admin"},
+
     # Facility Maintenance
     "facility.log_issue": {"admin", "ground_worker", "guard", "nurse"} # Added for low-clearance staff
 }

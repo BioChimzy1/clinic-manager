@@ -1,0 +1,1050 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analytics — ClinicManager</title>
+    <link href="/static/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#0A3530">
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/app.css">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        .analytics-card {
+            transition: transform 0.12s ease, box-shadow 0.12s ease;
+            height: 100%;
+            background: var(--cream) !important;
+            border: 1px solid rgba(15,76,70,0.08);
+            border-radius: 14px;
+            box-shadow: 0 2px 12px rgba(15,76,70,0.06);
+        }
+        .analytics-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 .5rem 1rem rgba(0,0,0,.1) !important;
+        }
+        .stat-number {
+            font-size: 2rem;
+            font-weight: 700;
+            line-height: 1.1;
+        }
+        .stat-label {
+            font-size: 0.85rem;
+            color: var(--charcoal-soft);
+        }
+        .chart-container {
+            position: relative;
+            height: 300px;
+            width: 100%;
+        }
+        .badge-debug {
+            background: #6f42c1;
+            color: white;
+            font-size: 0.65rem;
+            letter-spacing: 0.05em;
+            padding: 0.25rem 0.6rem;
+        }
+        .period-btn {
+            border: 1px solid rgba(15,76,70,0.15);
+            background: transparent;
+            color: var(--charcoal-soft);
+            font-weight: 500;
+            padding: 0.3rem 0.8rem;
+            border-radius: 6px;
+            transition: all 0.12s ease;
+        }
+        .period-btn:hover {
+            background: var(--teal-deep);
+            color: var(--cream);
+        }
+        .period-btn.active {
+            background: var(--teal-deep);
+            color: var(--cream);
+        }
+        .mini-chart {
+            height: 120px;
+        }
+        .export-btn {
+            background: var(--teal-deep);
+            color: var(--cream) !important;
+            border: none;
+            padding: 0.5rem 1.25rem;
+            border-radius: 999px;
+            font-weight: 600;
+            transition: background 0.15s ease;
+        }
+        .export-btn:hover {
+            background: var(--teal);
+            color: var(--cream) !important;
+        }
+        /* Heatmap styles */
+        .heatmap-cell {
+            padding: 4px 8px;
+            text-align: center;
+            font-size: 0.8rem;
+            transition: background-color 0.2s ease;
+        }
+        .heatmap-cell:hover {
+            opacity: 0.8;
+            transform: scale(1.05);
+        }
+        .heatmap-hour {
+            font-size: 0.7rem;
+            color: var(--charcoal-soft);
+        }
+        .loading-spinner {
+            width: 1.5rem;
+            height: 1.5rem;
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <div class="container">
+            <div class="app-container">
+                <div id="cmFlashContainer"></div>
+                
+                <div class="row">
+                    <div class="col-12">
+                        <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
+                            <div>
+                                <h3 class="mb-0" id="pageTitle">📊 Analytics</h3>
+                                <small class="text-muted" id="pageSubtitle">Loading...</small>
+                            </div>
+                            <div class="d-flex align-items-center gap-2">
+                                <small class="text-muted" id="lastUpdated">Loading...</small>
+                                <button class="export-btn btn-sm" id="exportBtn">📥 Export Data</button>
+                            </div>
+                        </div>
+
+                        <div class="alert alert-info py-2 mb-3">
+                            <small>All monetary values are displayed in Malawi Kwacha (MK).</small>
+                        </div>
+
+                        <!-- System Overview Stats -->
+                        <div class="row g-3 mb-4">
+                            <div class="col-md-3">
+                                <div class="analytics-card p-3 text-center border-start border-4 border-primary">
+                                    <div class="stat-number text-primary" id="totalClinics">
+                                        <div class="spinner-border spinner-border-sm text-primary" role="status">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
+                                    </div>
+                                    <div class="stat-label">Clinics</div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="analytics-card p-3 text-center border-start border-4 border-success">
+                                    <div class="stat-number text-success" id="totalStaff">
+                                        <div class="spinner-border spinner-border-sm text-success" role="status">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
+                                    </div>
+                                    <div class="stat-label">Staff</div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="analytics-card p-3 text-center border-start border-4 border-info">
+                                    <div class="stat-number text-info" id="totalPatients">
+                                        <div class="spinner-border spinner-border-sm text-info" role="status">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
+                                    </div>
+                                    <div class="stat-label">Patients</div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="analytics-card p-3 text-center border-start border-4 border-secondary">
+                                    <div class="stat-number text-secondary" id="totalVisits">
+                                        <div class="spinner-border spinner-border-sm text-secondary" role="status">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
+                                    </div>
+                                    <div class="stat-label">Total Visits</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row g-3 mb-4">
+                            <div class="col-md-4">
+                                <div class="analytics-card p-3 text-center border-start border-4 border-warning">
+                                    <div class="stat-number text-warning" id="totalRevenue">
+                                        <div class="spinner-border spinner-border-sm text-warning" role="status">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
+                                    </div>
+                                    <div class="stat-label">Total Revenue</div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="analytics-card p-3 text-center border-start border-4 border-danger">
+                                    <div class="stat-number text-danger" id="activeLoans">
+                                        <div class="spinner-border spinner-border-sm text-danger" role="status">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
+                                    </div>
+                                    <div class="stat-label">Active Loans</div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="analytics-card p-3 text-center border-start border-4 border-dark">
+                                    <div class="stat-number text-dark" id="inventoryItems">
+                                        <div class="spinner-border spinner-border-sm text-dark" role="status">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
+                                    </div>
+                                    <div class="stat-label">Inventory Items</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Today's Stats -->
+                        <div class="row g-3 mb-4">
+                            <div class="col-md-6">
+                                <div class="analytics-card p-3">
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
+                                        <h6 class="mb-0">Today's Visits</h6>
+                                        <span class="badge bg-primary" id="todayVisits">
+                                            <div class="spinner-border spinner-border-sm text-white" role="status">
+                                                <span class="visually-hidden">Loading...</span>
+                                            </div>
+                                        </span>
+                                    </div>
+                                    <div class="text-center">
+                                        <span class="display-6 text-success" id="todayRevenue">
+                                            <div class="spinner-border spinner-border-sm text-success" role="status">
+                                                <span class="visually-hidden">Loading...</span>
+                                            </div>
+                                        </span>
+                                        <div class="stat-label">Revenue Today</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="analytics-card p-3">
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
+                                        <h6 class="mb-0">Quick Stats</h6>
+                                        <span class="badge badge-debug">DEV</span>
+                                    </div>
+                                    <div class="row g-2">
+                                        <div class="col-6">
+                                            <small class="text-muted">Price List Items</small>
+                                            <div class="fw-bold" id="priceItems">
+                                                <div class="spinner-border spinner-border-sm text-secondary" role="status">
+                                                    <span class="visually-hidden">Loading...</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="col-6">
+                                            <small class="text-muted">Overdue Loans</small>
+                                            <div class="fw-bold text-danger" id="overdueLoans">
+                                                <div class="spinner-border spinner-border-sm text-danger" role="status">
+                                                    <span class="visually-hidden">Loading...</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Charts -->
+                        <div class="row g-4 mb-4">
+                            <div class="col-md-6">
+                                <div class="analytics-card p-3">
+                                    <div class="d-flex justify-content-between align-items-center mb-3">
+                                        <h6 class="mb-0">Revenue Timeline</h6>
+                                        <div class="btn-group btn-group-sm">
+                                            <button class="period-btn active" data-period="day">Day</button>
+                                            <button class="period-btn" data-period="week">Week</button>
+                                            <button class="period-btn" data-period="month">Month</button>
+                                        </div>
+                                    </div>
+                                    <div class="chart-container">
+                                        <canvas id="revenueChart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="analytics-card p-3">
+                                    <div class="d-flex justify-content-between align-items-center mb-3">
+                                        <h6 class="mb-0">Visit Volume</h6>
+                                        <div class="btn-group btn-group-sm">
+                                            <button class="period-btn active" data-period="day">Day</button>
+                                            <button class="period-btn" data-period="week">Week</button>
+                                            <button class="period-btn" data-period="month">Month</button>
+                                        </div>
+                                    </div>
+                                    <div class="chart-container">
+                                        <canvas id="visitsChart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Top Items & Staff Performance -->
+                        <div class="row g-4 mb-4">
+                            <div class="col-md-6">
+                                <div class="analytics-card p-3">
+                                    <h6 class="mb-3">🏆 Top Items Sold</h6>
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-striped mb-0">
+                                            <thead>
+                                                <tr>
+                                                    <th>Item</th>
+                                                    <th>Type</th>
+                                                    <th class="text-end">Total Sold</th>
+                                                    <th class="text-end">Visits</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="topItemsBody">
+                                                <tr><td colspan="4" class="text-center text-muted py-3">
+                                                    <div class="spinner-border text-primary" role="status">
+                                                        <span class="visually-hidden">Loading...</span>
+                                                    </div>
+                                                </td></tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="analytics-card p-3">
+                                    <h6 class="mb-3">👨‍⚕️ Staff Performance</h6>
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-striped mb-0">
+                                            <thead>
+                                                <tr>
+                                                    <th>Staff</th>
+                                                    <th>Role</th>
+                                                    <th class="text-end">Visits</th>
+                                                    <th class="text-end">Billed</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="staffPerformanceBody">
+                                                <tr><td colspan="4" class="text-center text-muted py-3">
+                                                    <div class="spinner-border text-primary" role="status">
+                                                        <span class="visually-hidden">Loading...</span>
+                                                    </div>
+                                                </td></tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Clinics Overview -->
+                        <div class="row g-4 mb-4">
+                            <div class="col-12">
+                                <div class="analytics-card p-3">
+                                    <h6 class="mb-3">🏥 Clinics Overview</h6>
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-striped">
+                                            <thead>
+                                                <tr>
+                                                    <th>Clinic</th>
+                                                    <th class="text-end">Staff</th>
+                                                    <th class="text-end">Patients</th>
+                                                    <th class="text-end">Visits</th>
+                                                    <th class="text-end">Revenue</th>
+                                                    <th>Created</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="clinicsBody">
+                                                <tr><td colspan="6" class="text-center text-muted py-3">
+                                                    <div class="spinner-border text-primary" role="status">
+                                                        <span class="visually-hidden">Loading...</span>
+                                                    </div>
+                                                </td></tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Activity Heatmap -->
+                        <div class="row g-4 mb-4">
+                            <div class="col-12">
+                                <div class="analytics-card p-3">
+                                    <h6 class="mb-3">🔥 Activity Heatmap (Last 7 Days)</h6>
+                                    <div id="heatmapContainer" style="overflow-x: auto;">
+                                        <div id="heatmapLoading" class="text-center py-3">
+                                            <div class="spinner-border text-primary" role="status">
+                                                <span class="visually-hidden">Loading heatmap...</span>
+                                            </div>
+                                        </div>
+                                        <table class="table table-sm table-bordered" id="heatmapTable" style="display: none;">
+                                            <!-- Rendered by JavaScript -->
+                                        </table>
+                                    </div>
+                                    <div class="mt-2 text-center">
+                                        <small class="text-muted">Color intensity represents visit volume (darker = more visits)</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Inventory Health -->
+                        <div class="row g-4 mb-4">
+                            <div class="col-md-6">
+                                <div class="analytics-card p-3">
+                                    <h6 class="mb-3">📦 Inventory by Category</h6>
+                                    <div class="chart-container" style="height: 250px;">
+                                        <canvas id="inventoryCategoryChart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="analytics-card p-3">
+                                    <h6 class="mb-3">⚠️ Inventory Alerts</h6>
+                                    <div class="row g-3">
+                                        <div class="col-6">
+                                            <div class="text-center p-3 border rounded">
+                                                <div class="display-6 text-danger" id="lowStockCount">
+                                                    <div class="spinner-border spinner-border-sm text-danger" role="status">
+                                                        <span class="visually-hidden">Loading...</span>
+                                                    </div>
+                                                </div>
+                                                <div class="stat-label">Low Stock Items</div>
+                                            </div>
+                                        </div>
+                                        <div class="col-6">
+                                            <div class="text-center p-3 border rounded">
+                                                <div class="display-6 text-danger" id="outOfStockCount">
+                                                    <div class="spinner-border spinner-border-sm text-danger" role="status">
+                                                        <span class="visually-hidden">Loading...</span>
+                                                    </div>
+                                                </div>
+                                                <div class="stat-label">Out of Stock</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="mt-3">
+                                        <small class="text-muted">Expiring soon:</small>
+                                        <div id="expiringItems" class="small text-warning">
+                                            <div class="spinner-border spinner-border-sm text-warning" role="status">
+                                                <span class="visually-hidden">Loading...</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Audit Summary -->
+                        <div class="row g-4 mb-4">
+                            <div class="col-md-6">
+                                <div class="analytics-card p-3">
+                                    <h6 class="mb-3">📋 Audit Action Summary</h6>
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-striped mb-0">
+                                            <thead>
+                                                <tr>
+                                                    <th>Action</th>
+                                                    <th class="text-end">Count</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="auditActionsBody">
+                                                <tr><td colspan="2" class="text-center text-muted py-3">
+                                                    <div class="spinner-border text-primary" role="status">
+                                                        <span class="visually-hidden">Loading...</span>
+                                                    </div>
+                                                </td></tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="analytics-card p-3">
+                                    <h6 class="mb-3">👤 Most Active Staff</h6>
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-striped mb-0">
+                                            <thead>
+                                                <tr>
+                                                    <th>Staff</th>
+                                                    <th class="text-end">Actions</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="activeStaffBody">
+                                                <tr><td colspan="2" class="text-center text-muted py-3">
+                                                    <div class="spinner-border text-primary" role="status">
+                                                        <span class="visually-hidden">Loading...</span>
+                                                    </div>
+                                                </td></tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Loan Performance -->
+                        <div class="row g-4 mb-4">
+                            <div class="col-12">
+                                <div class="analytics-card p-3">
+                                    <h6 class="mb-3">💳 Loan Performance</h6>
+                                    <div class="row g-3">
+                                        <div class="col-md-3">
+                                            <div class="text-center p-2 border rounded">
+                                                <div class="fw-bold" id="totalLoans">
+                                                    <div class="spinner-border spinner-border-sm text-secondary" role="status">
+                                                        <span class="visually-hidden">Loading...</span>
+                                                    </div>
+                                                </div>
+                                                <small class="text-muted">Total Loans</small>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <div class="text-center p-2 border rounded">
+                                                <div class="fw-bold" id="totalLoaned">
+                                                    <div class="spinner-border spinner-border-sm text-secondary" role="status">
+                                                        <span class="visually-hidden">Loading...</span>
+                                                    </div>
+                                                </div>
+                                                <small class="text-muted">Amount Loaned</small>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <div class="text-center p-2 border rounded">
+                                                <div class="fw-bold text-success" id="repaymentRate">
+                                                    <div class="spinner-border spinner-border-sm text-success" role="status">
+                                                        <span class="visually-hidden">Loading...</span>
+                                                    </div>
+                                                </div>
+                                                <small class="text-muted">Repayment Rate</small>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <div class="text-center p-2 border rounded">
+                                                <div class="fw-bold text-danger" id="overdueAmount">
+                                                    <div class="spinner-border spinner-border-sm text-danger" role="status">
+                                                        <span class="visually-hidden">Loading...</span>
+                                                    </div>
+                                                </div>
+                                                <small class="text-muted">Overdue Amount</small>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/static/js/shell.js"></script>
+    <script src="/static/js/outbox.js"></script>
+    <script>
+    // All analytics charts
+    let revenueChartInstance = null;
+    let visitsChartInstance = null;
+    let inventoryChartInstance = null;
+    let apiTier = 'clinic'; // Default to clinic-level
+
+    document.addEventListener('DOMContentLoaded', async function () {
+        const { authenticated, session } = await CMShell.init({ active: 'analytics' });
+        if (!authenticated) return;
+
+                // --- DYNAMIC API TIER SELECTION ---
+        // First, check if the user is a developer (from the session object)
+        const isDeveloper = !!session.is_developer;
+        
+        // If not a developer, check their role and clinic count
+        const isAdmin = (session.role || '').toLowerCase() === 'admin';
+        const hasMultipleClinics = (session.clinics && session.clinics.length > 1);
+
+        // Log to console so you can see exactly what the browser sees
+        console.log('Session Data:', session);
+        console.log('Is Developer?', isDeveloper);
+        console.log('Is Admin?', isAdmin);
+        console.log('Clinics:', session.clinics);
+
+        if (isDeveloper) {
+            apiTier = 'developer';
+            document.getElementById('pageTitle').textContent = '📊 Developer Analytics';
+            document.getElementById('pageSubtitle').textContent = 'System-wide metrics across all clinics';
+        } else if (isAdmin && hasMultipleClinics) {
+            apiTier = 'owner';
+            document.getElementById('pageTitle').textContent = '📊 Owner Analytics';
+            document.getElementById('pageSubtitle').textContent = 'Aggregated metrics across all your clinics';
+        } else if (isAdmin) {
+            apiTier = 'clinic';
+            document.getElementById('pageTitle').textContent = '📊 Clinic Analytics';
+            document.getElementById('pageSubtitle').textContent = 'Metrics for your current clinic';
+        } else {
+            apiTier = 'clinic';
+            document.getElementById('pageTitle').textContent = '📊 Clinic Analytics';
+            document.getElementById('pageSubtitle').textContent = 'Metrics for your current clinic';
+        }
+        // ------------------------------------
+
+        loadAllData();
+
+        // Period buttons for charts
+        document.querySelectorAll('.period-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const parent = this.closest('.btn-group');
+                parent.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+                
+                const period = this.dataset.period;
+                const isRevenue = this.closest('.analytics-card').querySelector('canvas#revenueChart');
+                
+                if (isRevenue) {
+                    loadRevenueData(period);
+                } else {
+                    loadVisitsData(period);
+                }
+            });
+        });
+
+        // Export button
+        document.getElementById('exportBtn').addEventListener('click', exportData);
+    });
+
+    async function loadAllData() {
+        const overviewOk = await loadOverview();
+        if (!overviewOk) return;
+
+        await Promise.all([
+            loadRevenueData('day'),
+            loadVisitsData('day'),
+            loadTopItems(),
+            loadStaffPerformance(),
+            loadClinics(),
+            loadInventoryStatus(),
+            loadAuditSummary(),
+            loadLoanPerformance(),
+            loadHeatmap()
+        ]);
+    }
+
+    async function loadOverview() {
+        try {
+            const res = await fetch(`/api/analytics/${apiTier}/overview`);
+            if (res.status === 403 || res.status === 401) {
+                CMShell.flash('You do not have permission to view analytics for this scope.', 'error');
+                window.location.href = '/dashboard';
+                return false;
+            }
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+
+            document.getElementById('totalClinics').textContent = data.total_clinics;
+            document.getElementById('totalStaff').textContent = data.total_staff;
+            document.getElementById('totalPatients').textContent = data.total_patients;
+            document.getElementById('totalVisits').textContent = data.total_visits;
+            document.getElementById('totalRevenue').textContent = `MK ${CMShell.formatNumber(data.total_revenue / 100)}`;
+            document.getElementById('activeLoans').textContent = data.active_loans;
+            document.getElementById('inventoryItems').textContent = data.total_inventory_items;
+            document.getElementById('priceItems').textContent = data.total_price_items;
+            document.getElementById('todayVisits').textContent = data.today_visits;
+            document.getElementById('todayRevenue').textContent = `MK ${CMShell.formatNumber(data.today_revenue / 100)}`;
+            
+            // Update timestamp
+            document.getElementById('lastUpdated').textContent = `Last updated: ${new Date(data.fetched_at).toLocaleString()}`;
+            
+            return true;
+        } catch (err) {
+            console.error('Failed to load overview:', err);
+            return false;
+        }
+    }
+
+    async function loadRevenueData(period) {
+        try {
+            const res = await fetch(`/api/analytics/${apiTier}/revenue-timeline?period=${period}`);
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+
+            const labels = data.data.map(d => d.label);
+            const values = data.data.map(d => d.revenue / 100);
+
+            if (revenueChartInstance) {
+                revenueChartInstance.destroy();
+            }
+
+            const ctx = document.getElementById('revenueChart').getContext('2d');
+            revenueChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Revenue (MK)',
+                        data: values,
+                        borderColor: '#E8743B',
+                        backgroundColor: 'rgba(232, 116, 59, 0.1)',
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 4,
+                        pointBackgroundColor: '#E8743B'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                callback: function(value) {
+                                    return 'MK ' + value.toLocaleString();
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        } catch (err) {
+            console.error('Failed to load revenue data:', err);
+        }
+    }
+
+    async function loadVisitsData(period) {
+        try {
+            const res = await fetch(`/api/analytics/${apiTier}/visits-timeline?period=${period}`);
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+
+            const labels = data.data.map(d => d.label);
+            const values = data.data.map(d => d.visits);
+
+            if (visitsChartInstance) {
+                visitsChartInstance.destroy();
+            }
+
+            const ctx = document.getElementById('visitsChart').getContext('2d');
+            visitsChartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Visits',
+                        data: values,
+                        backgroundColor: 'rgba(15, 76, 70, 0.7)',
+                        borderColor: '#0F4C46',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                stepSize: 1
+                            }
+                        }
+                    }
+                }
+            });
+        } catch (err) {
+            console.error('Failed to load visits data:', err);
+        }
+    }
+
+    async function loadTopItems() {
+        try {
+            const res = await fetch(`/api/analytics/${apiTier}/top-items`);
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+
+            const tbody = document.getElementById('topItemsBody');
+            if (data.items.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3">No items sold yet.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = data.items.map(item => `
+                <tr>
+                    <td><strong>${cmEscapeHtml(item.name)}</strong></td>
+                    <td><span class="badge bg-info text-dark">${cmEscapeHtml(item.type)}</span></td>
+                    <td class="text-end">${CMShell.formatNumber(item.total_sold)}</td>
+                    <td class="text-end">${CMShell.formatNumber(item.visit_count)}</td>
+                </tr>
+            `).join('');
+        } catch (err) {
+            console.error('Failed to load top items:', err);
+        }
+    }
+
+    async function loadStaffPerformance() {
+        try {
+            const res = await fetch(`/api/analytics/${apiTier}/staff-performance`);
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+
+            const tbody = document.getElementById('staffPerformanceBody');
+            if (data.staff.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3">No staff data available.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = data.staff.map(s => `
+                <tr>
+                    <td><strong>${cmEscapeHtml(s.name)}</strong></td>
+                    <td><span class="badge bg-secondary">${cmEscapeHtml(s.role)}</span></td>
+                    <td class="text-end">${CMShell.formatNumber(s.visits_handled)}</td>
+                    <td class="text-end">MK ${CMShell.formatNumber(s.total_billed / 100)}</td>
+                </tr>
+            `).join('');
+        } catch (err) {
+            console.error('Failed to load staff performance:', err);
+        }
+    }
+
+    async function loadClinics() {
+        try {
+            const res = await fetch(`/api/analytics/${apiTier}/clinics`);
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+
+            const tbody = document.getElementById('clinicsBody');
+            if (data.clinics.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">No clinics found.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = data.clinics.map(c => `
+                <tr>
+                    <td><strong>${cmEscapeHtml(c.name)}</strong></td>
+                    <td class="text-end">${CMShell.formatNumber(c.staff_count)}</td>
+                    <td class="text-end">${CMShell.formatNumber(c.patient_count)}</td>
+                    <td class="text-end">${CMShell.formatNumber(c.visit_count)}</td>
+                    <td class="text-end">MK ${CMShell.formatNumber(c.total_revenue / 100)}</td>
+                    <td><small>${c.created_at ? c.created_at.slice(0, 10) : '—'}</small></td>
+                </tr>
+            `).join('');
+        } catch (err) {
+            console.error('Failed to load clinics:', err);
+        }
+    }
+
+    async function loadHeatmap() {
+        try {
+            const res = await fetch(`/api/analytics/${apiTier}/activity-heatmap`);
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+            renderHeatmap(data);
+        } catch (err) {
+            console.error('Failed to load heatmap:', err);
+            document.getElementById('heatmapLoading').innerHTML = 
+                '<p class="text-muted">Unable to load heatmap data.</p>';
+        }
+    }
+
+    function renderHeatmap(data) {
+        const loading = document.getElementById('heatmapLoading');
+        const table = document.getElementById('heatmapTable');
+        
+        loading.style.display = 'none';
+        table.style.display = 'table';
+        
+        // Find max value for color scaling
+        let maxVal = 0;
+        data.matrix.forEach(day => {
+            day.hours.forEach(h => {
+                if (h > maxVal) maxVal = h;
+            });
+        });
+        
+        // Define color palette (from light to dark terracotta)
+        const baseColor = { r: 232, g: 116, b: 59 };
+        
+        function getColor(intensity) {
+            if (intensity === 0) return '#f8f9fa';
+            const factor = intensity / 100;
+            const r = Math.round(baseColor.r + (50 - baseColor.r) * factor);
+            const g = Math.round(baseColor.g + (40 - baseColor.g) * factor);
+            const b = Math.round(baseColor.b + (30 - baseColor.b) * factor);
+            return `rgb(${r}, ${g}, ${b})`;
+        }
+        
+        let html = '<thead><tr><th>Hour</th>';
+        data.days.forEach(day => {
+            html += `<th class="text-center">${day}</th>`;
+        });
+        html += '</tr></thead><tbody>';
+        
+        for (let hour = 0; hour < 24; hour++) {
+            html += `<tr><td class="heatmap-hour">${String(hour).padStart(2, '0')}:00</td>`;
+            data.matrix.forEach(day => {
+                const val = day.hours[hour];
+                const intensity = maxVal > 0 ? Math.round((val / maxVal) * 100) : 0;
+                const bgColor = getColor(intensity);
+                const textColor = intensity > 50 ? '#fff' : '#333';
+                html += `<td class="heatmap-cell" style="background-color: ${bgColor}; color: ${textColor};">
+                    <small>${val}</small>
+                </td>`;
+            });
+            html += '</tr>';
+        }
+        
+        html += '</tbody>';
+        table.innerHTML = html;
+    }
+
+    async function loadInventoryStatus() {
+        try {
+            const res = await fetch(`/api/analytics/${apiTier}/inventory-status`);
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+
+            document.getElementById('lowStockCount').textContent = data.low_stock_count;
+            document.getElementById('outOfStockCount').textContent = data.out_of_stock_count;
+
+            // Category chart
+            const categories = data.by_category.map(c => c.category);
+            const quantities = data.by_category.map(c => c.total_quantity);
+
+            if (inventoryChartInstance) {
+                inventoryChartInstance.destroy();
+            }
+
+            const ctx = document.getElementById('inventoryCategoryChart').getContext('2d');
+            inventoryChartInstance = new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: categories,
+                    datasets: [{
+                        data: quantities,
+                        backgroundColor: [
+                            '#E8743B', '#0F4C46', '#6f42c1', '#198754',
+                            '#dc3545', '#ffc107', '#0dcaf0', '#6c757d'
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                boxWidth: 12,
+                                padding: 8
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Expiring items
+            const expiringDiv = document.getElementById('expiringItems');
+            if (data.expiring_soon.length === 0) {
+                expiringDiv.textContent = 'No items expiring in the next 30 days.';
+            } else {
+                expiringDiv.innerHTML = data.expiring_soon.map(e => 
+                    `${e.category}: ${e.count} item(s) (${CMShell.formatNumber(e.quantity)} units)`
+                ).join('<br>');
+            }
+        } catch (err) {
+            console.error('Failed to load inventory status:', err);
+        }
+    }
+
+    async function loadAuditSummary() {
+        try {
+            const res = await fetch(`/api/analytics/${apiTier}/audit-summary`);
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+
+            // Actions
+            const actionsBody = document.getElementById('auditActionsBody');
+            if (data.actions.length === 0) {
+                actionsBody.innerHTML = '<tr><td colspan="2" class="text-center text-muted py-3">No audit data yet.</td></tr>';
+            } else {
+                actionsBody.innerHTML = data.actions.map(a => `
+                    <tr>
+                        <td><code>${cmEscapeHtml(a.action)}</code></td>
+                        <td class="text-end">${CMShell.formatNumber(a.count)}</td>
+                    </tr>
+                `).join('');
+            }
+
+            // Active staff
+            const staffBody = document.getElementById('activeStaffBody');
+            if (data.active_staff.length === 0) {
+                staffBody.innerHTML = '<tr><td colspan="2" class="text-center text-muted py-3">No audit activity yet.</td></tr>';
+            } else {
+                staffBody.innerHTML = data.active_staff.map(s => `
+                    <tr>
+                        <td><strong>${cmEscapeHtml(s.name)}</strong></td>
+                        <td class="text-end">${CMShell.formatNumber(s.count)}</td>
+                    </tr>
+                `).join('');
+            }
+        } catch (err) {
+            console.error('Failed to load audit summary:', err);
+        }
+    }
+
+    async function loadLoanPerformance() {
+        try {
+            const res = await fetch(`/api/analytics/${apiTier}/loan-performance`);
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+
+            document.getElementById('totalLoans').textContent = data.total_loans;
+            document.getElementById('totalLoaned').textContent = `MK ${CMShell.formatNumber(data.total_loaned / 100)}`;
+            document.getElementById('repaymentRate').textContent = data.repayment_rate.toFixed(1) + '%';
+            document.getElementById('overdueAmount').textContent = `MK ${CMShell.formatNumber(data.overdue_amount / 100)}`;
+            document.getElementById('overdueLoans').textContent = data.overdue_count;
+        } catch (err) {
+            console.error('Failed to load loan performance:', err);
+        }
+    }
+
+    async function exportData() {
+        try {
+            const res = await fetch(`/api/analytics/${apiTier}/export`);
+            if (res.status === 403 || res.status === 401) {
+                CMShell.flash('You do not have permission to export this data.', 'error');
+                return;
+            }
+            if (!res.ok) throw new Error('bad response');
+            const data = await res.json();
+
+            // Create download link
+            const blob = new Blob([data.csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = data.filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error('Failed to export data:', err);
+            alert('Failed to export data. Please try again.');
+        }
+    }
+
+    function cmEscapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str || '';
+        return div.innerHTML;
+    }
+    </script>
+</body>
+</html>

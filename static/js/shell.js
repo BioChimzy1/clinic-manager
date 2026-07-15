@@ -24,6 +24,8 @@ const CMShell = (function () {
         // Utilities
         { href: '/about', label: 'ℹ️ About', page: 'about' },
         { href: '/contact', label: '📞 Contact', page: 'contact' },
+        // Developer Tools
+        { href: '/analytics', label: '📊 Analytics', page: 'analytics',  roles: ['admin'] },
     ];
 
     const PUBLIC_PAGES = ['login'];
@@ -36,9 +38,15 @@ const CMShell = (function () {
     }
 
     function renderNav(activePage, session) {
-        const navHtml = NAV_ITEMS.map(item =>
-            `<a class="nav-link${item.page === activePage ? ' active fw-bold' : ''}" href="${item.href}">${item.label}</a>`
-        ).join('');
+    const visibleItems = NAV_ITEMS.filter(item => {
+        if (!item.roles) return true; // no restriction = visible to everyone
+        if (session.is_developer) return true; // developer sees everything
+        return item.roles.includes((session.role || '').toLowerCase());
+    });
+
+    const navHtml = visibleItems.map(item =>
+        `<a class="nav-link${item.page === activePage ? ' active fw-bold' : ''}" href="${item.href}">${item.label}</a>`
+    ).join('');
 
         let clinicSwitcher = '';
         if (session.clinics && session.clinics.length > 1) {
@@ -66,7 +74,7 @@ const CMShell = (function () {
                     <a class="nav-link dropdown-toggle" href="#" id="currencyDropdown" role="button" data-bs-toggle="dropdown">
                         💰 <span id="currencySymbolNav">MK</span>
                     </a>
-                    <ul class="dropdown-menu dropdown-menu-end" id="currencyDropdownMenu">
+                    <ul class="dropdown-menu dropdown-menu-end" id="currencyDropdownMenu" style="max-width: min(280px, 90vw);">
                         <li><h6 class="dropdown-header">Select Currency</h6></li>
                         <li><hr class="dropdown-divider"></li>
                         <li><span class="dropdown-item-text text-muted small">Loading...</span></li>
@@ -142,7 +150,7 @@ const CMShell = (function () {
                     if (data.currencies && data.currencies.length > 0) {
                         data.currencies.forEach(c => {
                             const li = document.createElement('li');
-                            li.innerHTML = `<a class="dropdown-item" href="#" data-currency-id="${c.id}">${c.symbol} - ${c.name}</a>`;
+                            li.innerHTML = `<a class="dropdown-item" href="#" data-currency-id="${c.id}" style="white-space: normal; word-break: break-word;">${c.symbol} - ${c.name}</a>`;
                             li.querySelector('a').addEventListener('click', async (e) => {
                                 e.preventDefault();
                                 const currencyId = e.currentTarget.getAttribute('data-currency-id');
@@ -317,12 +325,13 @@ const CMShell = (function () {
             } catch (err) {}
         }
 
-        const session = {
+                const session = {
             staff_id: verify?.staff_id || null,
             role: verify?.role || 'offline',
             clinic_id: verify?.clinic_id || null,
             clinic_name: verify?.clinic_name || 'Offline Clinic',
-            clinics: clinics
+            clinics: clinics,
+            is_developer: verify?.is_developer || false  // <--- ADD THIS LINE
         };
 
         // Lifecycle Synchronization Gate to ensure DOM components have finalized rendering

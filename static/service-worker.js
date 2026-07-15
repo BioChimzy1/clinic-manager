@@ -1,4 +1,4 @@
-const CACHE_NAME = 'clinicmanager-v11'; // Bumped to v11 to clear old v10 CDN caches
+const CACHE_NAME = 'clinicmanager-v12'; // Bumped to v12 to clear old v11
 
 const STATIC_ASSETS = [
   '/static/manifest.json',

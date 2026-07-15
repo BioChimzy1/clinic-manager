@@ -72,10 +72,19 @@ def api_logout():
 def api_verify():
     if 'staff_id' not in session:
         return jsonify({'success': False}), 401
+    
+    # Fetch the is_developer flag from the database
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT is_developer FROM staff WHERE id = ?", (session['staff_id'],))
+    row = cursor.fetchone()
+    is_developer = bool(row[0]) if row else False
+    
     return jsonify({
         'success': True,
         'staff_id': session['staff_id'],
         'role': session['role'],
         'clinic_id': session.get('clinic_id'),
-        'clinic_name': session.get('clinic_name')
+        'clinic_name': session.get('clinic_name'),
+        'is_developer': is_developer  # <--- ADD THIS
     })
